@@ -1,0 +1,113 @@
+{
+  "BruteForce": {
+    "Enabled": true,
+    "FailedAttemptsThreshold": 5,
+    "PasswordSprayAccountThreshold": 5,
+    "TimeWindowMinutes": 5
+  },
+  "SuspiciousPowerShell": {
+    "Enabled": true,
+    "DetectEncodedCommand": true,
+    "DetectHiddenWindow": true,
+    "DetectExecutionPolicyBypass": true,
+    "DetectDownloadKeywords": true,
+    "LongBase64Length": 80
+  },
+  "SuspiciousProcessCreation": {
+    "Enabled": true,
+    "LongCommandLineLength": 500,
+    "SuspiciousProcessPaths": [
+      "\\Temp\\",
+      "\\AppData\\Local\\Temp\\",
+      "\\Downloads\\",
+      "\\Загрузки\\",
+      "\\Документы\\",
+      "\\Рабочий стол\\"
+    ],
+    "SuspiciousParentChild": [
+      { "Parent": "winword.exe", "Child": "powershell.exe" },
+      { "Parent": "winword.exe", "Child": "cmd.exe" },
+      { "Parent": "excel.exe", "Child": "powershell.exe" },
+      { "Parent": "excel.exe", "Child": "cmd.exe" },
+      { "Parent": "outlook.exe", "Child": "powershell.exe" },
+      { "Parent": "outlook.exe", "Child": "cmd.exe" },
+      { "Parent": "wmiprvse.exe", "Child": "powershell.exe" },
+      { "Parent": "services.exe", "Child": "cmd.exe" },
+      { "Parent": "winword.exe", "Child": "mshta.exe" },
+      { "Parent": "winword.exe", "Child": "wscript.exe" },
+      { "Parent": "excel.exe", "Child": "mshta.exe" },
+      { "Parent": "outlook.exe", "Child": "rundll32.exe" },
+      { "Parent": "acrord32.exe", "Child": "powershell.exe" },
+      { "Parent": "w3wp.exe", "Child": "cmd.exe" },
+      { "Parent": "w3wp.exe", "Child": "powershell.exe" },
+      { "Parent": "sqlservr.exe", "Child": "cmd.exe" },
+      { "Parent": "sqlservr.exe", "Child": "powershell.exe" },
+      { "Parent": "spoolsv.exe", "Child": "cmd.exe" },
+      { "Parent": "svchost.exe", "Child": "whoami.exe" }
+    ]
+  },
+  "SuspiciousScheduledTask": {
+    "Enabled": true,
+    "SuspiciousPaths": [
+      "\\Temp\\",
+      "\\AppData\\",
+      "\\Downloads\\",
+      "\\Загрузки\\",
+      "\\Документы\\",
+      "\\Рабочий стол\\"
+    ]
+  },
+  "NewUser": {
+    "Enabled": true,
+    "PrivilegeWindowMinutes": 10
+  },
+  "PrivilegeChange": {
+    "Enabled": true,
+    "PrivilegedGroups": [
+      "Administrators",
+      "Администраторы",
+      "Domain Admins",
+      "Администраторы домена",
+      "Enterprise Admins",
+      "Администраторы предприятия",
+      "Schema Admins",
+      "Администраторы схемы",
+      "Backup Operators",
+      "Операторы архива",
+      "Account Operators",
+      "Операторы учета",
+      "Remote Desktop Users",
+      "Пользователи удаленного рабочего стола"
+    ]
+  },
+  "FailedLogon": {
+    "Enabled": true,
+    "ClusterThreshold": 3
+  },
+  "SuccessfulLogon": {
+    "Enabled": true
+  },
+  "RdpActivity": {
+    "Enabled": true
+  },
+  "ServiceInstallation": {
+    "Enabled": true
+  },
+  "LogClearing": {
+    "Enabled": true
+  },
+  "KnownThreatSignatures": {
+    "Enabled": true
+  },
+  "SigmaRules": {
+    "Enabled": true,
+    "RulesPath": "sigma-rules",
+    "AutoLoadOnStartup": true,
+    "IncludeExperimental": false,
+    "IncludeDeprecated": false,
+    "IncludeUnsupported": false
+  },
+  "Correlation": {
+    "CorrelationWindowMinutes": 10
+  }
+}

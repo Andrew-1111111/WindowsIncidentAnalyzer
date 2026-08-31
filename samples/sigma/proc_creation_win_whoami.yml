@@ -1,0 +1,16 @@
+title: Whoami Execution
+id: 11111111-1111-1111-1111-111111111101
+status: test
+description: Detects execution of whoami.exe, often used for host and account discovery.
+author: Windows Incident Analyzer sample
+logsource:
+  product: windows
+  category: process_creation
+detection:
+  selection:
+    Image|endswith: '\whoami.exe'
+  condition: selection
+level: medium
+tags:
+  - attack.discovery
+  - attack.t1033

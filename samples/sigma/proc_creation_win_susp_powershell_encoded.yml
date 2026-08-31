@@ -1,0 +1,22 @@
+title: Suspicious Encoded PowerShell Command
+id: 11111111-1111-1111-1111-111111111102
+status: test
+description: Detects PowerShell command lines that include encoded command switches.
+author: Windows Incident Analyzer sample
+logsource:
+  product: windows
+  category: process_creation
+detection:
+  selection:
+    CommandLine|contains:
+      - ' -enc '
+      - ' -encodedcommand '
+      - ' -e '
+    Image|endswith:
+      - '\powershell.exe'
+      - '\pwsh.exe'
+  condition: selection
+level: high
+tags:
+  - attack.execution
+  - attack.t1059.001

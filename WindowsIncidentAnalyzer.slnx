@@ -1,0 +1,4 @@
+<Solution>
+  <Project Path="WindowsIncidentAnalyzer.csproj" />
+  <Project Path="WindowsIncidentAnalyzer.Tests/WindowsIncidentAnalyzer.Tests.csproj" />
+</Solution>

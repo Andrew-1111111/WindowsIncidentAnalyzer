@@ -50,7 +50,7 @@ Every push and pull request to `main` / `master` runs [.github/workflows/build.y
 1. Restores dependencies and runs the test suite (117 tests).
 2. Publishes all three variants above as ZIP artifacts.
 
-Download builds from **Actions → latest workflow run → Artifacts**:
+Download CI builds from **Actions → latest workflow run → Artifacts**:
 
 | Artifact | Description |
 | --- | --- |
@@ -59,6 +59,23 @@ Download builds from **Actions → latest workflow run → Artifacts**:
 | `wia-win-x64-self-contained` | Self-contained x64 build (no separate runtime install) |
 
 You can also trigger a build manually via **Actions → Build → Run workflow**.
+
+### GitHub Releases
+
+Pushing a **version tag** creates a [GitHub Release](https://docs.github.com/en/repositories/releasing-projects-on-github/managing-releases-in-a-repository) with all three ZIP files attached:
+
+```bash
+git tag v1.0.0
+git push origin v1.0.0
+```
+
+Use tags in the form `v*` (for example `v1.0.0`, `v1.2.3-beta`). After the workflow finishes, open **Releases** on the repository page.
+
+| Package | When to use |
+| --- | --- |
+| `wia-win-x64-self-contained.zip` | Recommended — no separate .NET install |
+| `wia-win-x64-fdd.zip` | Smaller download if .NET 9 is already installed |
+| `wia-anycpu-fdd.zip` | Portable framework-dependent build |
 
 ## Run
 

@@ -35,6 +35,31 @@ dotnet test
 
 The compiled executable is named `wia.exe`. Data and logs are stored next to the executable under `data/`.
 
+### Local publish variants
+
+| Variant | Command | Notes |
+| --- | --- | --- |
+| **AnyCPU** (framework-dependent) | `dotnet publish -c Release` | Portable build; requires [.NET 9 runtime](https://dotnet.microsoft.com/download) |
+| **x64** (framework-dependent) | `dotnet publish -c Release -r win-x64 --self-contained false` | 64-bit Windows; requires .NET 9 runtime |
+| **x64 self-contained** | `dotnet publish -c Release -r win-x64 --self-contained true` | 64-bit Windows; bundles the .NET runtime |
+
+### GitHub Actions
+
+Every push and pull request to `main` / `master` runs [.github/workflows/build.yml](.github/workflows/build.yml) on `windows-latest`:
+
+1. Restores dependencies and runs the test suite (117 tests).
+2. Publishes all three variants above as ZIP artifacts.
+
+Download builds from **Actions → latest workflow run → Artifacts**:
+
+| Artifact | Description |
+| --- | --- |
+| `wia-anycpu-fdd` | Framework-dependent AnyCPU build |
+| `wia-win-x64-fdd` | Framework-dependent x64 build |
+| `wia-win-x64-self-contained` | Self-contained x64 build (no separate runtime install) |
+
+You can also trigger a build manually via **Actions → Build → Run workflow**.
+
 ## Run
 
 ```bash
@@ -328,5 +353,3 @@ Script-block text is stored and hashed. Encoded-command **text** may be decoded 
 | `Exporters/` | JSON, HTML, Excel export |
 | `Configuration/` | `appsettings.json`, `DetectionRules.json` |
 | `WindowsIncidentAnalyzer.Tests/` | Unit and integration tests |
-
-Russian documentation: [README.ru.md](README.ru.md).

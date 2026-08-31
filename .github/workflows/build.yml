@@ -1,0 +1,110 @@
+# Builds Windows Incident Analyzer (wia.exe) on Windows and publishes three variants:
+#   - anycpu-fdd        framework-dependent, AnyCPU (requires .NET 9 runtime)
+#   - win-x64-fdd         framework-dependent, x64   (requires .NET 9 runtime)
+#   - win-x64-sc          self-contained, x64        (bundled .NET runtime)
+#
+# Artifacts are attached to each workflow run (Actions → workflow run → Artifacts).
+
+name: Build
+
+on:
+  push:
+    branches:
+      - main
+      - master
+  pull_request:
+    branches:
+      - main
+      - master
+  workflow_dispatch:
+
+permissions:
+  contents: read
+
+jobs:
+  build:
+    name: Test and publish (${{ matrix.publish_id }})
+    runs-on: windows-latest
+    strategy:
+      fail-fast: false
+      matrix:
+        include:
+          - publish_id: anycpu-fdd
+            rid: ""
+            self_contained: false
+            artifact_name: wia-anycpu-fdd
+          - publish_id: win-x64-fdd
+            rid: win-x64
+            self_contained: false
+            artifact_name: wia-win-x64-fdd
+          - publish_id: win-x64-sc
+            rid: win-x64
+            self_contained: true
+            artifact_name: wia-win-x64-self-contained
+
+    steps:
+      - name: Checkout
+        uses: actions/checkout@v4
+
+      - name: Setup .NET 9
+        uses: actions/setup-dotnet@v4
+        with:
+          dotnet-version: 9.0.x
+
+      - name: Restore
+        shell: pwsh
+        run: |
+          dotnet restore WindowsIncidentAnalyzer.slnx
+          if ("${{ matrix.rid }}" -ne "") {
+            dotnet restore WindowsIncidentAnalyzer.csproj -r ${{ matrix.rid }}
+          }
+
+      - name: Test
+        if: matrix.publish_id == 'anycpu-fdd'
+        run: dotnet test WindowsIncidentAnalyzer.slnx -c Release --no-restore --verbosity normal
+
+      - name: Publish ${{ matrix.publish_id }}
+        shell: pwsh
+        run: |
+          $output = "${{ runner.temp }}/publish/${{ matrix.publish_id }}"
+          $args = @(
+            "publish", "WindowsIncidentAnalyzer.csproj",
+            "-c", "Release",
+            "--no-restore",
+            "-o", $output,
+            "-p:DebugType=None",
+            "-p:DebugSymbols=false"
+          )
+          if ("${{ matrix.rid }}" -ne "") {
+            $args += @("-r", "${{ matrix.rid }}")
+          }
+          if ("${{ matrix.self_contained }}" -eq "true") {
+            $args += @("--self-contained", "true")
+          } else {
+            $args += @("--self-contained", "false")
+          }
+          dotnet @args
+
+          $zip = "${{ runner.temp }}/${{ matrix.artifact_name }}.zip"
+          Compress-Archive -Path "$output/*" -DestinationPath $zip -Force
+          echo "ZIP_PATH=$zip" >> $env:GITHUB_ENV
+
+      - name: Upload artifact
+        uses: actions/upload-artifact@v4
+        with:
+          name: ${{ matrix.artifact_name }}
+          path: ${{ env.ZIP_PATH }}
+          if-no-files-found: error
+
+      - name: Build summary
+        if: matrix.publish_id == 'anycpu-fdd'
+        shell: pwsh
+        run: |
+          @"
+          ## Build artifacts
+          | Variant | RID | Self-contained | .NET runtime required |
+          | --- | --- | --- | --- |
+          | **wia-anycpu-fdd** | (default / AnyCPU) | No | Yes (.NET 9) |
+          | **wia-win-x64-fdd** | win-x64 | No | Yes (.NET 9) |
+          | **wia-win-x64-self-contained** | win-x64 | Yes | No |
+          "@ | Out-File -FilePath $env:GITHUB_STEP_SUMMARY -Encoding utf8 -Append

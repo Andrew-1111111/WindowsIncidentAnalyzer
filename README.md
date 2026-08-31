@@ -1,5 +1,7 @@
 # Windows Incident Analyzer
 
+**Russian version:** [README.ru.md](README.ru.md)
+
 Console application for **defensive** Windows Event Log analysis: collection, search, timeline construction, detection, Sigma rules, IOC matching, correlation, and export.
 
 The tool is intended for incident response, DFIR, and threat hunting on systems you are authorized to investigate. It does **not** exploit vulnerabilities, bypass security controls, or perform remote attacks.

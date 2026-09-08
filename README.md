@@ -2,21 +2,21 @@
 
 **Russian version:** [README.ru.md](README.ru.md)
 
-Console application for **defensive** Windows Event Log analysis: collection, search, timeline construction, detection, Sigma rules, IOC matching, correlation, and export.
+Console application for **defensive** Windows Event Log analysis: collection, search, timeline construction, detection, Sigma rules, IOC matching, CVE (CISA KEV) scanning, MITRE ATT&CK enrichment, correlation, and export.
 
 The tool is intended for incident response, DFIR, and threat hunting on systems you are authorized to investigate. It does **not** exploit vulnerabilities, bypass security controls, or perform remote attacks.
 
 ## Features
 
-- Live collection from **all available Windows event log channels** by default (or a single channel / EVTX import)
-- SQLite-backed storage with normalized event fields and full property bags
-- **19 detection engines**: behavioral rules, known-threat signatures, and **Sigma** (SigmaHQ)
-- Structured findings (`FindingContext`) with event metadata, Sigma match details, and MITRE tags
+- Live collection from Windows event log channels (default curated set, or **all available** channels / a single channel / EVTX import)
+- SQLite storage via **EF Core** with normalized event fields, property bags, findings, IOC, and CVE catalogs
+- **19 detection engines**: behavioral rules, known-threat signatures, and **Sigma** (Hayabusa-curated rule set)
+- Structured findings (`FindingContext`) with event metadata, Sigma match details, and MITRE tags (enriched from local ATT&CK data)
 - Event-type and severity validation (category / CRIT–HIGH alignment with the source event)
 - IOC import from JSON and automatic refresh from public defensive feeds
-- Automatic Sigma rule download from SigmaHQ on startup (cached)
+- Automatic download of Sigma rules (Hayabusa), MITRE ATT&CK, and CISA KEV on startup (cached)
 - Correlation chains across authentication, account creation, persistence, and PowerShell activity
-- Export to **JSON**, **HTML**, and **Excel (.xlsx)** with the full investigation payload
+- Export to **JSON**, **HTML**, and **Excel (.xlsx)** with full investigation payload (findings, IOC/CVE, correlations, timeline, related events, statistics)
 - Interactive `wia>` console when launched without arguments
 - Russian and English Windows log names (`Security` / `Безопасность`, etc.)
 
@@ -24,7 +24,7 @@ The tool is intended for incident response, DFIR, and threat hunting on systems 
 
 - Windows (Event Log APIs)
 - [.NET 9 SDK](https://dotnet.microsoft.com/download)
-- **Administrator** privileges for the **Security** log and Sysmon (EVTX, Application, System, PowerShell, search, analyze, IOC, and export work without elevation)
+- **Administrator** privileges for the **Security** log and Sysmon (EVTX, Application, System, PowerShell, search, analyze, IOC, CVE, and export work without elevation)
 
 ## Build
 
@@ -33,7 +33,7 @@ dotnet build
 dotnet test
 ```
 
-The compiled executable is named `wia.exe`. Data and logs are stored next to the executable under `data/`.
+The test suite currently includes **187** tests. The compiled executable is named `wia.exe`. Runtime data and logs are stored next to the executable under `data/`.
 
 ### Local publish variants
 
@@ -47,7 +47,7 @@ The compiled executable is named `wia.exe`. Data and logs are stored next to the
 
 Every push and pull request to `main` / `master` runs [.github/workflows/build.yml](.github/workflows/build.yml) on `windows-latest`:
 
-1. Restores dependencies and runs the test suite (117 tests).
+1. Restores dependencies and runs the test suite.
 2. Publishes all three variants above as ZIP artifacts.
 
 Download CI builds from **Actions → latest workflow run → Artifacts**:
@@ -89,18 +89,20 @@ wia analyze
 wia export --format html --output data/report.html
 ```
 
-Skip online IOC/Sigma refresh on startup (offline / fast start):
+Skip online threat-intelligence refresh on startup (offline / fast start):
 
 ```bash
 wia --skip-bootstrap analyze
 ```
+
+On startup (unless help/version), the tool prints a short **investigation database summary** (event count, time range, findings, correlations, incidents, IOC/CVE records). Threat-intel download can still be skipped with `--skip-bootstrap`.
 
 ## Startup and threat intelligence
 
 On launch, the application can automatically:
 
 1. Download and import public **IOC feeds** (default: every 6 hours)
-2. Download **SigmaHQ** Windows rules into `data/sigma-rules/` (default: every 24 hours)
+2. Download **Hayabusa** curated Sigma/native rules into `data/sigma-rules/` (default: every 24 hours)
 3. Download **MITRE ATT&CK** enterprise bundle into `data/mitre/` (default: every 7 days)
 4. Download **CISA Known Exploited Vulnerabilities** catalog into SQLite (default: every 7 days)
 
@@ -128,12 +130,12 @@ When feeds are cached, startup shows IOC, Sigma, MITRE, and CVE counts and the n
 | `collect` | Read live channels or a read-only EVTX file into SQLite |
 | `search` | Query collected events |
 | `timeline` | Chronological view, optional export |
-| `analyze` | Detection rules + IOC/CVE scan + correlation |
+| `analyze` | Detection rules + MITRE enrichment + IOC/CVE scan + correlation |
 | `ioc import` / `ioc update` / `ioc scan` | Load, refresh, and match indicators |
 | `sigma load` / `sigma update` / `sigma list` / `sigma stats` | Manage Sigma rules |
 | `mitre load` / `mitre update` / `mitre lookup` / `mitre stats` | MITRE ATT&CK database |
 | `cve load` / `cve update` / `cve lookup` / `cve scan` / `cve stats` | CISA KEV CVE catalog |
-| `export` | JSON / HTML / Excel report |
+| `export` | JSON / HTML / Excel report (supports the same time/entity filters as search) |
 | `stats` | Event ID, user, process, IP, and finding counts |
 
 Global time filters (most commands): `--hours`, `--from`, `--to`, `--date`, `--user`, `--ip`, `--process`, `--event-id`, `--keyword`, `--limit`.
@@ -150,9 +152,9 @@ wia collect --event-id 4624,4625,4688
 wia collect --evtx "C:\Evidence\Security.evtx" --batch-size 500 --limit 100000
 ```
 
-If `--log` is omitted, the collector enumerates **every available event log channel** on the host (`CollectAllLogs: true` in `appsettings.json`). Use `--log all` for the same behavior explicitly, or `--log Security` / `Sysmon` / etc. for a single channel. Set `CollectAllLogs` to `false` to limit default collection to Security, System, Application, PowerShell, and Sysmon. Channels that cannot be opened (permissions, missing provider) are skipped.
+If `--log` is omitted, default channels depend on `CollectAllLogs` in `appsettings.json` (`false` = Security, System, Application, PowerShell, Sysmon; `true` = every available channel). Use `--log all` to force all channels, or `--log Security` / `Sysmon` / etc. for a single channel. Channels that cannot be opened (permissions, missing provider) are skipped.
 
-By default, `collect` reads **all recorded events** with no time window and no event cap. Use `--hours`, `--from` / `--to`, or `--date` to narrow the time range, and `--limit` to cap how many events are ingested. Parallel readers are capped when many channels are open; stuck channels time out after `ChannelReadTimeoutSeconds`.
+By default, `collect` reads **all recorded events** with no time window and no event cap. Use `--hours`, `--from` / `--to`, or `--date` to narrow the time range, and `--limit` to cap how many events are ingested. Parallelism is controlled by root `MaxDegreeOfParallelism` (`0` = unlimited, `1` = sequential, `N` = cap). Stuck channels time out after `ChannelReadTimeoutSeconds`.
 
 ### Search
 
@@ -172,7 +174,7 @@ wia timeline --user admin --export timeline.json
 
 ### Analyze
 
-Runs all enabled detectors, IOC matching, and correlation. Findings are stored in SQLite and printed in a **list format** (not a wide table):
+Runs all enabled detectors, MITRE enrichment, IOC/CVE matching, and correlation. Findings are stored in SQLite and printed in a **list format** (not a wide table):
 
 ```text
 CRIT 2026-08-29 15:03:14 evt 4104 CredentialAccess
@@ -214,7 +216,7 @@ wia sigma list --limit 20
 wia sigma stats
 ```
 
-Sigma rules are evaluated during `analyze` when `SigmaRules.Enabled` is true in `DetectionRules.json`. Matches populate `FindingContext` (matched fields/values, condition, MITRE tags, Sigma ID). MITRE technique/tactic IDs are enriched with human-readable names from the local ATT&CK database.
+Rules are downloaded from the [Hayabusa rules](https://github.com/Yamato-Security/hayabusa-rules) archive (Sigma + native YAML). They are evaluated during `analyze` when `SigmaRules.Enabled` is true in `DetectionRules.json`. Matches populate `FindingContext` (matched fields/values, condition, MITRE tags, Sigma ID). Technique/tactic IDs are enriched with human-readable names from the local ATT&CK database.
 
 ### MITRE ATT&CK
 
@@ -246,6 +248,7 @@ Source: [CISA Known Exploited Vulnerabilities catalog](https://www.cisa.gov/know
 wia export --format json --output data/report.json
 wia export --format html --output data/report.html
 wia export --format csv --output data/investigation.csv
+wia export --hours 24 --user admin --format html
 wia stats
 ```
 
@@ -265,10 +268,11 @@ UTF-8 with readable Cyrillic (`UnsafeRelaxedJsonEscaping`).
 
 Self-contained dark-theme report (no CDN):
 
-- Investigation filter metadata
-- Findings (critical/high and all), IOC matches, correlations, timeline
-- Related events table with process, network, script-block, and property details
-- Full statistics (top event IDs, users, processes, IPs, events by hour)
+- Severity cards; Critical/High and all findings (same **59** columns as Excel)
+- IOC matches, CVE matches, correlations, timeline
+- Related events table (**35** columns) including process, network, script block, properties JSON, and raw XML
+- Long text fields (script blocks, raw JSON/XML, large property bags) are shown in full via collapsible blocks
+- Statistics (top event IDs, users, processes, IPs, events by hour)
 
 #### CSV (`--format csv`)
 
@@ -276,7 +280,7 @@ Writes **Excel `.xlsx`** files with bold centered headers and auto-filter:
 
 | File | Contents |
 | --- | --- |
-| `*-findings.xlsx` | 56 columns: severity, IDs, rule metadata, event type, validation flags, process/network/file fields, Sigma/MITRE, raw evidence |
+| `*-findings.xlsx` | 59 columns: severity, IDs, rule metadata, event type, validation flags, process/network/file fields, Sigma/MITRE, raw evidence |
 | `*-timeline.xlsx` | Timeline items + event row ID |
 | `*-iocs.xlsx` | IOC matches + event row ID |
 | `*-cves.xlsx` | CVE matches (CISA KEV) + event row ID |
@@ -316,7 +320,7 @@ Writes **Excel `.xlsx`** files with bold centered headers and auto-filter:
 
 ### Sigma (`SigmaRules`)
 
-Thousands of SigmaHQ rules with logsource matching, field modifiers, and condition evaluation. Findings use `RuleName = SigmaRules` and detailed `FindingContext`.
+Thousands of Hayabusa/Sigma rules with logsource matching, field modifiers, and condition evaluation. Findings use `RuleName = SigmaRules` and detailed `FindingContext`.
 
 ### Correlation
 
@@ -340,7 +344,7 @@ Each finding includes:
 
 | File | Purpose |
 | --- | --- |
-| `Configuration/appsettings.json` | Database path, collection/analysis parallelism, startup IOC/Sigma refresh |
+| `Configuration/appsettings.json` | Database path, `MaxDegreeOfParallelism`, collection options, startup IOC/Sigma/MITRE/CVE refresh |
 | `Configuration/DetectionRules.json` | Per-detector enable flags, thresholds, Sigma options |
 
 Disable a detector:
@@ -361,14 +365,14 @@ Default database: `data/investigation.db`. Log file: `data/wia.log`.
 ## Architecture
 
 ```text
-Program.cs  →  ApplicationBootstrap (IOC + Sigma)
+Program.cs  →  ApplicationBootstrap (DB summary + IOC/Sigma/MITRE/CVE)
            →  System.CommandLine
                     │
-     collect / search / timeline / analyze / ioc / sigma / export / stats
+     collect / search / timeline / analyze / ioc / sigma / mitre / cve / export / stats
                     │
-         Services (ingestion, detection, correlation, IOC, export)
+         Services (ingestion, detection, correlation, IOC/CVE, MITRE, export)
                     │
-         Repositories  →  SQLite (events, findings, IOC, Sigma metadata)
+         Repositories  →  EF Core / SQLite (Persistence/)
                     │
          EventXmlParser + EventFieldMapper  →  WindowsEvent
                     │
@@ -397,12 +401,14 @@ Script-block text is stored and hashed. Encoded-command **text** may be decoded 
 | Folder | Role |
 | --- | --- |
 | `Commands/` | CLI commands |
-| `Services/` | Collection, analysis, IOC feeds, export, statistics |
+| `Services/` | Collection, analysis, IOC/CVE feeds, MITRE, export, statistics |
 | `Detectors/` | Built-in and signature detectors |
 | `Sigma/` | Sigma YAML parser, engine, logsource catalog |
+| `Mitre/` | ATT&CK STIX and CISA KEV parsers |
 | `Models/` | Events, findings, correlations, filters |
-| `Repositories/` | SQLite access |
-| `Infrastructure/` | Bootstrap, mappers, paths, elevation |
+| `Persistence/` | EF Core `DbContext`, entities, mappers |
+| `Repositories/` | Data access over EF Core |
+| `Infrastructure/` | Bootstrap, schema upgrades, paths, elevation, HTTP resilience |
 | `Exporters/` | JSON, HTML, Excel export |
 | `Configuration/` | `appsettings.json`, `DetectionRules.json` |
 | `WindowsIncidentAnalyzer.Tests/` | Unit and integration tests |

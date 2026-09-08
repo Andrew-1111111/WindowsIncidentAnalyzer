@@ -1,6 +1,6 @@
-using Microsoft.EntityFrameworkCore;
-using WindowsIncidentAnalyzer.Data;
-using WindowsIncidentAnalyzer.Data.Entities;
+﻿using Microsoft.EntityFrameworkCore;
+using WindowsIncidentAnalyzer.Persistence;
+using WindowsIncidentAnalyzer.Persistence.Entities;
 using WindowsIncidentAnalyzer.Infrastructure;
 using WindowsIncidentAnalyzer.Models;
 

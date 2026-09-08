@@ -1,5 +1,5 @@
-using Microsoft.EntityFrameworkCore;
-using WindowsIncidentAnalyzer.Data;
+﻿using Microsoft.EntityFrameworkCore;
+using WindowsIncidentAnalyzer.Persistence;
 
 namespace WindowsIncidentAnalyzer.Infrastructure;
 

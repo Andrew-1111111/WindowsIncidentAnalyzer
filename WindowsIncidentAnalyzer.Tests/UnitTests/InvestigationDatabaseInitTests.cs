@@ -1,9 +1,9 @@
-using Microsoft.EntityFrameworkCore;
+﻿using Microsoft.EntityFrameworkCore;
 using Microsoft.Extensions.DependencyInjection;
 using Microsoft.Extensions.Logging.Abstractions;
 using Microsoft.Extensions.Options;
 using WindowsIncidentAnalyzer.Configuration;
-using WindowsIncidentAnalyzer.Data;
+using WindowsIncidentAnalyzer.Persistence;
 using WindowsIncidentAnalyzer.Infrastructure;
 using Xunit;
 

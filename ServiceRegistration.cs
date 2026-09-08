@@ -1,8 +1,8 @@
-using Microsoft.EntityFrameworkCore;
+﻿using Microsoft.EntityFrameworkCore;
 using Microsoft.Extensions.Configuration;
 using Microsoft.Extensions.DependencyInjection;
 using WindowsIncidentAnalyzer.Configuration;
-using WindowsIncidentAnalyzer.Data;
+using WindowsIncidentAnalyzer.Persistence;
 using WindowsIncidentAnalyzer.Detectors;
 using WindowsIncidentAnalyzer.Exporters;
 using WindowsIncidentAnalyzer.Infrastructure;

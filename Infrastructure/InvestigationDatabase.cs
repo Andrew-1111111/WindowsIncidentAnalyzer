@@ -1,10 +1,10 @@
-using Microsoft.Data.Sqlite;
+﻿using Microsoft.Data.Sqlite;
 using Microsoft.EntityFrameworkCore;
 using Microsoft.Extensions.DependencyInjection;
 using Microsoft.Extensions.Logging;
 using Microsoft.Extensions.Options;
 using WindowsIncidentAnalyzer.Configuration;
-using WindowsIncidentAnalyzer.Data;
+using WindowsIncidentAnalyzer.Persistence;
 
 namespace WindowsIncidentAnalyzer.Infrastructure;
 

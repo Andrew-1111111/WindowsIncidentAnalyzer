@@ -2,6 +2,8 @@ bin/
 obj/
 .vs/
 .idea/
+# Runtime investigation data next to the exe (SQLite, caches, exports).
+# Must stay lowercase-only so it does not collide with source folders on Windows.
 data/
 *.user
 *.suo

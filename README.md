@@ -65,11 +65,11 @@ You can also trigger a build manually via **Actions → Build → Run workflow**
 Pushing a **version tag** creates a [GitHub Release](https://docs.github.com/en/repositories/releasing-projects-on-github/managing-releases-in-a-repository) with all three ZIP files attached:
 
 ```bash
-git tag v1.0.0
-git push origin v1.0.0
+git tag v1.1.0
+git push origin v1.1.0
 ```
 
-Use tags in the form `v*` (for example `v1.0.0`, `v1.2.3-beta`). After the workflow finishes, open **Releases** on the repository page.
+Use tags in the form `v*` (for example `v1.1.0`, `v1.2.3-beta`). The release job runs only on tag pushes (not on ordinary `master` pushes). After the workflow finishes, open **Releases** on the repository page.
 
 | Package | When to use |
 | --- | --- |

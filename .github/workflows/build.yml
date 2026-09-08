@@ -4,7 +4,7 @@
 #   - win-x64-sc        self-contained, x64        (bundled .NET runtime)
 #
 # CI: push/PR to main|master → workflow artifacts only.
-# Release: push a version tag v* (e.g. v1.0.0) → GitHub Release with all ZIPs attached.
+# Release: push a version tag v* (e.g. v1.1.0) → GitHub Release with all ZIPs attached.
 
 name: Build
 
@@ -87,16 +87,15 @@ jobs:
             $args += @("--self-contained", "false")
           }
           dotnet @args
+          echo "PUBLISH_DIR=$output" >> $env:GITHUB_ENV
 
-          $zip = "${{ runner.temp }}/${{ matrix.artifact_name }}.zip"
-          Compress-Archive -Path "$output/*" -DestinationPath $zip -Force
-          echo "ZIP_PATH=$zip" >> $env:GITHUB_ENV
-
+      # Upload the publish folder (not a pre-built .zip). download-artifact@v8 may
+      # auto-extract uploaded zip files, which broke release/*.zip matching.
       - name: Upload artifact
         uses: actions/upload-artifact@v7
         with:
           name: ${{ matrix.artifact_name }}
-          path: ${{ env.ZIP_PATH }}
+          path: ${{ env.PUBLISH_DIR }}
           if-no-files-found: error
 
       - name: Build summary
@@ -125,8 +124,22 @@ jobs:
         uses: actions/download-artifact@v8
         with:
           pattern: wia-*
-          path: release
-          merge-multiple: true
+          path: artifacts
+          merge-multiple: false
+
+      - name: Package ZIP files
+        run: |
+          set -euo pipefail
+          mkdir -p release
+          for dir in artifacts/*/; do
+            name="$(basename "$dir")"
+            (cd "$dir" && zip -r -q "../../release/${name}.zip" .)
+            echo "Created release/${name}.zip ($(du -h "release/${name}.zip" | cut -f1))"
+          done
+          ls -lh release/
+          test -f release/wia-anycpu-fdd.zip
+          test -f release/wia-win-x64-fdd.zip
+          test -f release/wia-win-x64-self-contained.zip
 
       - name: Create GitHub Release
         uses: softprops/action-gh-release@v3
@@ -148,3 +161,5 @@ jobs:
             **Recommended for most users:** `wia-win-x64-self-contained.zip`
           files: release/*.zip
           fail_on_unmatched_files: true
+        env:
+          GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}

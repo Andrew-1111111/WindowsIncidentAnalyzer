@@ -49,14 +49,14 @@ dotnet test
 
 ### GitHub Releases
 
-Тег `v*` (например `v1.0.0`) создаёт Release со всеми тремя ZIP:
+Тег `v*` (например `v1.1.0`) создаёт Release со всеми тремя ZIP:
 
 ```bash
-git tag v1.0.0
-git push origin v1.0.0
+git tag v1.1.0
+git push origin v1.1.0
 ```
 
-Рекомендуемый пакет для большинства пользователей: `wia-win-x64-self-contained.zip`.
+Джоб Release запускается только при push тега (обычный push в `master` релиз не создаёт). Рекомендуемый пакет: `wia-win-x64-self-contained.zip`.
 
 ## Запуск
 

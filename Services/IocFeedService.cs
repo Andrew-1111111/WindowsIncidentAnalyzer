@@ -1,7 +1,6 @@
 using System.Collections.Concurrent;
 using System.Net;
 using System.Net.Http;
-using System.Net.Sockets;
 using System.Text.Json;
 using System.Text.RegularExpressions;
 using Microsoft.Extensions.Logging;
@@ -12,9 +11,11 @@ using WindowsIncidentAnalyzer.Models;
 
 namespace WindowsIncidentAnalyzer.Services;
 
-public sealed class IocFeedService(IOptions<AnalyzerOptions> options, ILogger<IocFeedService> logger) : IIocFeedService
+public sealed class IocFeedService(
+    IOptions<AnalyzerOptions> options,
+    IWebDownloadService webDownload,
+    ILogger<IocFeedService> logger) : IIocFeedService
 {
-    private static readonly HttpClient Http = CreateClient();
 
     public async Task<IReadOnlyList<Ioc>> DownloadAsync(
         CancellationToken cancellationToken,
@@ -26,94 +27,136 @@ public sealed class IocFeedService(IOptions<AnalyzerOptions> options, ILogger<Io
             collected.Add(item);
         }
 
-        var parallelism = ParallelAnalysis.ResolveIocFeedParallelism(options.Value.IocFeed);
-        var completed = 0;
         var total = Feeds.Length;
+        var parallelism = ParallelAnalysis.ResolveIocFeedParallelism(options.Value, total);
+        var completed = 0;
+        using var gate = parallelism < total ? new SemaphoreSlim(parallelism, parallelism) : null;
 
-        await Parallel.ForEachAsync(
-            Feeds,
-            new ParallelOptions
+        async Task DownloadOneAsync(Feed feed)
+        {
+            if (gate != null)
             {
-                MaxDegreeOfParallelism = parallelism,
-                CancellationToken = cancellationToken
-            },
-            async (feed, token) =>
+                await gate.WaitAsync(cancellationToken).ConfigureAwait(false);
+            }
+
+            try
             {
-                await DownloadFeedAsync(feed, collected, token).ConfigureAwait(false);
+                progress?.Report($"> {feed.Name}");
+                using var feedCts = CancellationTokenSource.CreateLinkedTokenSource(cancellationToken);
+                feedCts.CancelAfter(ResolveFeedTimeout());
+
+                try
+                {
+                    await DownloadFeedAsync(feed, collected, feedCts.Token).ConfigureAwait(false);
+                }
+                catch (OperationCanceledException) when (!cancellationToken.IsCancellationRequested)
+                {
+                    logger.LogWarning("Feed {Name} exceeded download timeout", feed.Name);
+                }
+                catch (Exception ex)
+                {
+                    logger.LogWarning(ex, "Feed {Name} failed", feed.Name);
+                }
+            }
+            finally
+            {
+                gate?.Release();
                 var done = Interlocked.Increment(ref completed);
                 progress?.Report($"[{done}/{total}] {feed.Name}");
-            });
+            }
+        }
+
+        await Task.WhenAll(Feeds.Select(DownloadOneAsync)).ConfigureAwait(false);
 
         progress?.Report("Deduplicating IOCs...");
         return Deduplicate(collected);
     }
 
-    private async Task DownloadFeedAsync(Feed feed, ConcurrentBag<Ioc> collected, CancellationToken cancellationToken)
+    private async Task DownloadFeedAsync(
+        Feed feed,
+        ConcurrentBag<Ioc> collected,
+        CancellationToken cancellationToken)
     {
-        cancellationToken.ThrowIfCancellationRequested();
+        logger.LogInformation("Downloading IOC feed {Name} via {Client}", feed.Name, WebDownloadClients.IocFeeds);
 
-        var timeoutSeconds = Math.Max(5, options.Value.IocFeed.FeedTimeoutSeconds);
-        logger.LogInformation("Downloading IOC feed {Name}", feed.Name);
-
-        using var request = new HttpRequestMessage(feed.Method, feed.Url);
-        if (feed.JsonBody != null)
+        var urls = feed.AllUrls;
+        for (var attempt = 0; attempt < urls.Count; attempt++)
         {
-            request.Content = new StringContent(feed.JsonBody, System.Text.Encoding.UTF8, "application/json");
-        }
-
-        using var feedCts = CancellationTokenSource.CreateLinkedTokenSource(cancellationToken);
-        feedCts.CancelAfter(TimeSpan.FromSeconds(timeoutSeconds));
-
-        try
-        {
-            using var response = await Http.SendAsync(
-                request,
-                HttpCompletionOption.ResponseHeadersRead,
-                feedCts.Token).ConfigureAwait(false);
-
-            if (!response.IsSuccessStatusCode)
-            {
-                logger.LogWarning("Feed {Name} returned {Status}", feed.Name, (int)response.StatusCode);
-                return;
-            }
-
-            var body = await response.Content.ReadAsStringAsync(feedCts.Token).ConfigureAwait(false);
+            var url = urls[attempt];
             try
             {
-                foreach (var ioc in feed.Parser(body, feed.Name))
+                using var request = new HttpRequestMessage(feed.Method, url);
+                if (feed.JsonBody != null)
                 {
-                    collected.Add(ioc);
+                    request.Content = new StringContent(feed.JsonBody, System.Text.Encoding.UTF8, "application/json");
                 }
+
+                // ResponseContentRead keeps the full body download inside Polly attempt/total timeouts.
+                using var response = await webDownload.SendAsync(
+                    request,
+                    cancellationToken,
+                    WebDownloadClients.IocFeeds).ConfigureAwait(false);
+
+                if (!response.IsSuccessStatusCode)
+                {
+                    logger.LogWarning(
+                        "Feed {Name} returned {Status} from {Url}",
+                        feed.Name,
+                        (int)response.StatusCode,
+                        url);
+                    continue;
+                }
+
+                var body = await response.Content.ReadAsStringAsync(cancellationToken).ConfigureAwait(false);
+                try
+                {
+                    foreach (var ioc in feed.Parser(body, feed.Name))
+                    {
+                        collected.Add(ioc);
+                    }
+                }
+                catch (JsonException ex)
+                {
+                    logger.LogWarning(ex, "Feed {Name} returned invalid JSON from {Url}", feed.Name, url);
+                }
+
+                return;
             }
-            catch (JsonException ex)
+            catch (OperationCanceledException) when (cancellationToken.IsCancellationRequested)
             {
-                logger.LogWarning(ex, "Feed {Name} returned invalid JSON", feed.Name);
+                throw;
+            }
+            catch (OperationCanceledException ex) when (attempt < urls.Count - 1)
+            {
+                logger.LogDebug(ex, "Feed {Name} timed out from {Url}; trying fallback", feed.Name, url);
+            }
+            catch (Exception ex) when (attempt < urls.Count - 1)
+            {
+                logger.LogDebug(ex, "Feed {Name} failed from {Url}; trying fallback", feed.Name, url);
+            }
+            catch (OperationCanceledException ex)
+            {
+                logger.LogWarning(ex, "Feed {Name} timed out", feed.Name);
+            }
+            catch (Exception ex)
+            {
+                logger.LogWarning(ex, "Feed {Name} could not be downloaded", feed.Name);
             }
         }
-        catch (OperationCanceledException) when (!cancellationToken.IsCancellationRequested)
+    }
+
+    private TimeSpan ResolveFeedTimeout()
+    {
+        var feedOptions = options.Value.IocFeed;
+        if (feedOptions.FeedDownloadTimeoutSeconds > 0)
         {
-            logger.LogWarning("Feed {Name} timed out after {Seconds}s", feed.Name, timeoutSeconds);
+            return TimeSpan.FromSeconds(feedOptions.FeedDownloadTimeoutSeconds);
         }
-        catch (OperationCanceledException) when (cancellationToken.IsCancellationRequested)
-        {
-            throw;
-        }
-        catch (HttpRequestException ex)
-        {
-            logger.LogWarning(ex, "Feed {Name} could not be downloaded (network/HTTP error)", feed.Name);
-        }
-        catch (IOException ex)
-        {
-            logger.LogWarning(ex, "Feed {Name} could not be downloaded (I/O error)", feed.Name);
-        }
-        catch (SocketException ex)
-        {
-            logger.LogWarning(ex, "Feed {Name} could not be downloaded (socket error)", feed.Name);
-        }
-        catch (Exception ex)
-        {
-            logger.LogWarning(ex, "Failed to download feed {Name}", feed.Name);
-        }
+
+        var resilience = options.Value.HttpResilience;
+        resilience.Clients.TryGetValue(WebDownloadClients.IocFeeds, out var clientOverride);
+        var totalSeconds = clientOverride?.TotalRequestTimeoutSeconds ?? resilience.TotalRequestTimeoutSeconds;
+        return TimeSpan.FromSeconds(Math.Max(1, totalSeconds));
     }
 
     private static List<Ioc> Deduplicate(IEnumerable<Ioc> items)
@@ -300,14 +343,6 @@ public sealed class IocFeedService(IOptions<AnalyzerOptions> options, ILogger<Io
         }
     }
 
-    private static HttpClient CreateClient()
-    {
-        var client = new HttpClient { Timeout = Timeout.InfiniteTimeSpan };
-        client.DefaultRequestHeaders.UserAgent.ParseAdd("WindowsIncidentAnalyzer/1.0 (defensive DFIR; +local investigation)");
-        client.DefaultRequestHeaders.Accept.ParseAdd("text/plain, application/json, */*");
-        return client;
-    }
-
     private static readonly Feed[] Feeds =
     [
         new("abuse.ch URLhaus recent URLs", "https://urlhaus.abuse.ch/downloads/text_recent/", HttpMethod.Get, null, (body, src) => ParseTextLines(body, src, "url")),
@@ -320,9 +355,14 @@ public sealed class IocFeedService(IOptions<AnalyzerOptions> options, ILogger<Io
         new("GreenSnow blacklist", "https://blocklist.greensnow.co/greensnow.txt", HttpMethod.Get, null, (body, src) => ParseTextLines(body, src, "ip")),
         new("blocklist.de all", "https://lists.blocklist.de/lists/all.txt", HttpMethod.Get, null, (body, src) => ParseTextLines(body, src, "ip")),
         new("CINS Army bad IPs", "https://cinsscore.com/list/ci-badguys.txt", HttpMethod.Get, null, (body, src) => ParseTextLines(body, src, "ip")),
-        new("Binary Defense banlist", "https://www.binarydefense.com/banlist.txt", HttpMethod.Get, null, (body, src) => ParseTextLines(body, src, "ip")),
         new("Spamhaus DROP v4", "https://www.spamhaus.org/drop/drop_v4.json", HttpMethod.Get, null, IocFeedParsers.ParseSpamhausDrop),
-        new("OpenPhish feed", "https://openphish.com/feed.txt", HttpMethod.Get, null, (body, src) => ParseTextLines(body, src, "url")),
+        new(
+            "Phishing URL blocklist",
+            "https://raw.githubusercontent.com/openphish/public_feed/refs/heads/main/feed.txt",
+            HttpMethod.Get,
+            null,
+            (body, src) => ParseTextLines(body, src, "url"),
+            FallbackUrls: ["https://openphish.com/feed.txt"]),
         new("FireHOL cybercrime IPs", "https://raw.githubusercontent.com/firehol/blocklist-ipsets/master/cybercrime.ipset", HttpMethod.Get, null, (body, src) => ParseTextLines(body, src, "ip")),
         new("Public malware SHA-256 list", "https://raw.githubusercontent.com/romainmarcoux/malicious-hash/main/full-hash-sha256-aa.txt", HttpMethod.Get, null, (body, src) => ParseTextLines(body, src, "hash")),
         new("Neo23x0 signature-base C2 IOCs", "https://raw.githubusercontent.com/Neo23x0/signature-base/master/iocs/c2-iocs.txt", HttpMethod.Get, null, ParseMixedIocs)
@@ -364,5 +404,12 @@ public sealed class IocFeedService(IOptions<AnalyzerOptions> options, ILogger<Io
         string Url,
         HttpMethod Method,
         string? JsonBody,
-        Func<string, string, IEnumerable<Ioc>> Parser);
+        Func<string, string, IEnumerable<Ioc>> Parser,
+        string[]? FallbackUrls = null)
+    {
+        public IReadOnlyList<string> AllUrls =>
+            FallbackUrls is { Length: > 0 }
+                ? [Url, ..FallbackUrls]
+                : [Url];
+    }
 }

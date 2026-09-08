@@ -46,7 +46,7 @@ internal static class ProcessElevation
             return rest;
         }
 
-        if (!ConsoleLaunch.IsInteractive || IsHelpOrVersion(rest))
+        if (!ConsoleLaunch.IsInteractive || ApplicationBootstrap.IsHelpOrVersion(rest))
         {
             AppRuntime.LimitedMode = true;
             return rest;
@@ -129,9 +129,6 @@ internal static class ProcessElevation
         var remaining = args.Where(a => !string.Equals(a, flag, StringComparison.OrdinalIgnoreCase)).ToArray();
         return (present, remaining);
     }
-
-    private static bool IsHelpOrVersion(string[] args) =>
-        args.Any(a => a is "-h" or "-?" or "--help" or "--version" or "/?");
 
     private static string QuoteArguments(IEnumerable<string> args) =>
         string.Join(" ", args.Select(static a =>

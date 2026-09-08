@@ -1,4 +1,5 @@
 using System.IO.Compression;
+using System.Net.Http;
 using Microsoft.Extensions.Logging;
 using Microsoft.Extensions.Options;
 using WindowsIncidentAnalyzer.Configuration;
@@ -12,15 +13,17 @@ namespace WindowsIncidentAnalyzer.Services;
 public sealed class SigmaRuleService(
     ISigmaRuleRepository repository,
     IOptions<DetectionRulesOptions> options,
+    IWebDownloadService webDownload,
     ILogger<SigmaRuleService> logger) : ISigmaRuleService
 {
-    private static readonly HttpClient Http = CreateClient();
     private readonly SigmaYamlParser _parser = new();
 
     public IReadOnlyList<SigmaRule> GetRules() => repository.GetRules();
 
     public async Task EnsureLoadedAsync(CancellationToken cancellationToken)
     {
+        LoadMetadataIfPresent();
+
         if (repository.Count > 0)
         {
             return;
@@ -50,23 +53,29 @@ public sealed class SigmaRuleService(
             throw new DirectoryNotFoundException($"Sigma rules directory was not found: {fullPath}");
         }
 
+        LoadMetadataIfPresent(fullPath);
         var parsed = _parser.ParseDirectory(fullPath);
-        var filtered = FilterRules(parsed);
+        var filtered = SigmaRuleFilter.Apply(parsed, options.Value.SigmaRules);
         await repository.ReplaceAsync(filtered, cancellationToken);
         logger.LogInformation("Loaded {Count} Sigma rule(s) from {Path}", filtered.Count, fullPath);
         return filtered.Count;
     }
 
-    public async Task<int> UpdateFromSigmaHqAsync(CancellationToken cancellationToken)
+    public Task<int> UpdateFromSigmaHqAsync(CancellationToken cancellationToken) =>
+        UpdateFromHayabusaRulesAsync(cancellationToken);
+
+    public async Task<int> UpdateFromHayabusaRulesAsync(CancellationToken cancellationToken)
     {
         var target = ResolveRulesDirectory();
         Directory.CreateDirectory(target);
 
-        logger.LogInformation("Downloading SigmaHQ rule set...");
-        using var response = await Http.GetAsync(
-            "https://github.com/SigmaHQ/sigma/archive/refs/heads/master.zip",
+        logger.LogInformation("Downloading Hayabusa rule set (hayabusa-rules)...");
+        using var request = new HttpRequestMessage(HttpMethod.Get, HayabusaEventMetadata.RulesRepositoryZipUrl);
+        using var response = await webDownload.SendAsync(
+            request,
             HttpCompletionOption.ResponseHeadersRead,
-            cancellationToken);
+            cancellationToken,
+            WebDownloadClients.Sigma);
         response.EnsureSuccessStatusCode();
 
         await using var stream = await response.Content.ReadAsStreamAsync(cancellationToken);
@@ -74,43 +83,68 @@ public sealed class SigmaRuleService(
         var extracted = 0;
         foreach (var entry in zip.Entries)
         {
-            if (!entry.FullName.Contains("/rules/windows/", StringComparison.OrdinalIgnoreCase) &&
-                !entry.FullName.Contains("/rules-emerging-threats/", StringComparison.OrdinalIgnoreCase))
+            cancellationToken.ThrowIfCancellationRequested();
+            if (entry.Length == 0 || string.IsNullOrWhiteSpace(entry.Name))
             {
                 continue;
             }
 
-            if (!entry.Name.EndsWith(".yml", StringComparison.OrdinalIgnoreCase) &&
-                !entry.Name.EndsWith(".yaml", StringComparison.OrdinalIgnoreCase))
+            if (!HayabusaRulesArchive.IsSupportedEntry(entry.FullName, entry.Name))
             {
                 continue;
             }
 
-            var relative = entry.FullName[(entry.FullName.IndexOf("/rules", StringComparison.Ordinal) + 1)..];
+            var relative = HayabusaRulesArchive.GetRelativePath(entry.FullName);
+            if (relative == null)
+            {
+                continue;
+            }
+
             var destination = Path.Combine(target, relative.Replace('/', Path.DirectorySeparatorChar));
             Directory.CreateDirectory(Path.GetDirectoryName(destination)!);
-            entry.ExtractToFile(destination, overwrite: true);
+            await using var source = entry.Open();
+            await using var destinationStream = new FileStream(
+                destination,
+                FileMode.Create,
+                FileAccess.Write,
+                FileShare.None,
+                bufferSize: 81920,
+                useAsync: true);
+            await source.CopyToAsync(destinationStream, cancellationToken);
             extracted++;
         }
 
-        logger.LogInformation("Extracted {Count} Sigma YAML file(s) to {Path}", extracted, target);
+        logger.LogInformation("Extracted {Count} Hayabusa file(s) to {Path}", extracted, target);
+        LoadMetadataIfPresent(target);
         return await LoadFromDirectoryAsync(target, cancellationToken);
     }
 
-    private List<SigmaRule> FilterRules(IReadOnlyList<SigmaRule> rules)
+    private void LoadMetadataIfPresent(string? rulesDirectory = null)
     {
-        var sigma = options.Value.SigmaRules;
-        return rules
-            .Where(rule => sigma.IncludeExperimental || !IsStatus(rule, "experimental"))
-            .Where(rule => sigma.IncludeDeprecated || !IsStatus(rule, "deprecated"))
-            .Where(rule => sigma.IncludeUnsupported || !IsStatus(rule, "unsupported"))
-            .Where(rule => string.IsNullOrWhiteSpace(rule.Logsource.Product) ||
-                           rule.Logsource.Product.Equals("windows", StringComparison.OrdinalIgnoreCase))
-            .ToList();
-    }
+        var candidates = new List<string>();
+        if (!string.IsNullOrWhiteSpace(rulesDirectory))
+        {
+            candidates.Add(Path.Combine(rulesDirectory, "config"));
+        }
 
-    private static bool IsStatus(SigmaRule rule, string status) =>
-        string.Equals(rule.Status, status, StringComparison.OrdinalIgnoreCase);
+        var configured = rulesDirectory ?? AppPaths.ResolveRelative(
+            options.Value.SigmaRules.RulesPath);
+        candidates.Add(Path.Combine(configured, "config"));
+
+        foreach (var configDirectory in candidates.Distinct(StringComparer.OrdinalIgnoreCase))
+        {
+            if (!Directory.Exists(configDirectory))
+            {
+                continue;
+            }
+
+            HayabusaEventMetadata.LoadFromConfigDirectory(configDirectory);
+            if (HayabusaEventMetadata.IsLoaded)
+            {
+                return;
+            }
+        }
+    }
 
     private string ResolveRulesDirectory()
     {
@@ -118,12 +152,5 @@ public sealed class SigmaRuleService(
         return Path.IsPathRooted(configured)
             ? configured
             : AppPaths.ResolveRelative(configured);
-    }
-
-    private static HttpClient CreateClient()
-    {
-        var client = new HttpClient { Timeout = TimeSpan.FromMinutes(5) };
-        client.DefaultRequestHeaders.UserAgent.ParseAdd("WindowsIncidentAnalyzer/1.0 (defensive DFIR; +local investigation)");
-        return client;
     }
 }

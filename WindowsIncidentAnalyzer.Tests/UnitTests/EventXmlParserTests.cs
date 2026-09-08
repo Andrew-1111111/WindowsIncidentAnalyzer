@@ -51,6 +51,66 @@ public sealed class EventXmlParserTests
     }
 
     [Fact]
+    public void TryParse_ParsesCharacterReferencesInData()
+    {
+        const string xml = """
+            <Event xmlns="http://schemas.microsoft.com/win/2004/08/events/event">
+              <System>
+                <Provider Name="Microsoft-Windows-Security-Auditing" />
+                <EventID>1</EventID>
+                <TimeCreated SystemTime="2026-08-01T12:00:00.0000000Z" />
+                <Channel>Security</Channel>
+                <Computer>LAB-HOST-01</Computer>
+              </System>
+              <EventData>
+                <Data Name="Message">line1&#x01;line2</Data>
+              </EventData>
+            </Event>
+            """;
+
+        var evt = _parser.TryParse(xml);
+
+        Assert.NotNull(evt);
+        Assert.Contains('\u0001', evt!.Properties["Message"]);
+    }
+
+    [Fact]
+    public void TryParse_ExtractsNestedUserDataProperties()
+    {
+        const string xml = """
+            <Event xmlns="http://schemas.microsoft.com/win/2004/08/events/event">
+              <System>
+                <Provider Name="Contoso" />
+                <EventID>100</EventID>
+                <TimeCreated SystemTime="2026-08-01T12:00:00.0000000Z" />
+                <Channel>Application</Channel>
+                <Computer>LAB-HOST-01</Computer>
+              </System>
+              <UserData>
+                <CustomEvent xmlns="http://contoso.example">
+                  <Status>Failed</Status>
+                  <Details>
+                    <Code>7</Code>
+                  </Details>
+                </CustomEvent>
+              </UserData>
+            </Event>
+            """;
+
+        var evt = _parser.TryParse(xml);
+
+        Assert.NotNull(evt);
+        Assert.Equal("Failed", evt!.Properties["Status"]);
+        Assert.Equal("7", evt.Properties["Details.Code"]);
+    }
+
+    [Fact]
+    public void TryParse_CorruptXml_ReturnsNull()
+    {
+        Assert.Null(_parser.TryParse("<not-xml"));
+    }
+
+    [Fact]
     public void Parse_CorruptXml_ThrowsInvalidOperation()
     {
         Assert.Throws<InvalidOperationException>(() => _parser.Parse("<not-xml"));

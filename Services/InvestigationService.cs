@@ -13,20 +13,42 @@ public sealed class InvestigationService(
     ISuspiciousActivityService detection,
     ICorrelationService correlation,
     IIocDetectionService iocs,
+    ICveDetectionService cves,
+    ICveDatabaseService cveDatabase,
     ISigmaRuleService sigmaRules,
+    IMitreAttackService mitreAttack,
+    IMitreAttackEnrichmentService mitreEnrichment,
     ILogger<InvestigationService> logger) : IInvestigationService
 {
     public async Task<InvestigationSummary> AnalyzeAsync(EventQueryFilter? filter, CancellationToken cancellationToken)
     {
         await sigmaRules.EnsureLoadedAsync(cancellationToken);
+        await mitreAttack.EnsureLoadedAsync(cancellationToken);
+        await cveDatabase.EnsureLoadedAsync(cancellationToken);
         var count = await events.CountAsync(filter, cancellationToken);
         logger.LogInformation("Starting investigation analysis over {Count} event(s)", count);
 
-        // Run sequentially through the DB-heavy phases to avoid triple concurrent reads of the same
-        // event store. CPU-bound detector/correlation/IOC work still parallelizes internally.
+        // Detection is the heavy CPU phase (especially Sigma). Correlation / IOC / CVE
+        // each use their own EF contexts and can run concurrently afterward.
         var produced = await detection.AnalyzeAsync(filter, cancellationToken);
-        var chains = await correlation.CorrelateAsync(filter, cancellationToken);
-        var matches = await iocs.ScanAsync(filter, cancellationToken);
+        mitreEnrichment.Enrich(produced);
+        logger.LogInformation(
+            "Analysis produced {FindingCount} finding(s); running correlation, IOC, and CVE scans in parallel",
+            produced.Count);
+
+        var chainsTask = correlation.CorrelateAsync(filter, cancellationToken);
+        var matchesTask = iocs.ScanAsync(filter, cancellationToken);
+        var cveMatchesTask = cves.ScanAsync(filter, cancellationToken);
+        await Task.WhenAll(chainsTask, matchesTask, cveMatchesTask);
+
+        var chains = await chainsTask;
+        var matches = await matchesTask;
+        var cveMatches = await cveMatchesTask;
+        logger.LogInformation(
+            "Analysis complete: {CorrelationCount} correlation(s), {IocCount} IOC match(es), {CveCount} CVE match(es)",
+            chains.Count,
+            matches.Count,
+            cveMatches.Count);
 
         await findings.ClearAsync(cancellationToken);
         await correlations.ClearAsync(cancellationToken);
@@ -39,6 +61,7 @@ public sealed class InvestigationService(
             Findings = produced,
             Correlations = chains,
             IocMatches = matches,
+            CveMatches = cveMatches,
             TopSuspiciousUsers = produced
                 .Select(f => f.User)
                 .Where(u => !string.IsNullOrWhiteSpace(u))
@@ -72,7 +95,8 @@ public sealed class InvestigationService(
                 summary.TopSuspiciousUsers,
                 summary.TopSuspiciousIps,
                 Correlations = chains.Count,
-                IocMatches = matches.Count
+                IocMatches = matches.Count,
+                CveMatches = cveMatches.Count
             })
         }, cancellationToken);
 

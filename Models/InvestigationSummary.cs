@@ -10,6 +10,8 @@ public sealed class InvestigationSummary
 
     public IReadOnlyList<IocMatch> IocMatches { get; set; } = [];
 
+    public IReadOnlyList<CveMatch> CveMatches { get; set; } = [];
+
     public IReadOnlyList<string> TopSuspiciousUsers { get; set; } = [];
 
     public IReadOnlyList<string> TopSuspiciousIps { get; set; } = [];

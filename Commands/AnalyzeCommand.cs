@@ -13,7 +13,7 @@ public static class AnalyzeCommand
 {
     public static Command Create(IServiceProvider services)
     {
-        var command = new Command("analyze", "Run detection rules, IOC matching, and correlation over collected events.");
+        var command = new Command("analyze", "Run detection rules (including Sigma), MITRE enrichment, IOC/CVE matching, and correlation.");
         command.Options.Add(SharedCliOptions.Hours);
         command.Options.Add(SharedCliOptions.From);
         command.Options.Add(SharedCliOptions.To);

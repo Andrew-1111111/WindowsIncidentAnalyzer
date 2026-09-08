@@ -1,7 +1,6 @@
 using System.CommandLine;
 using Microsoft.Extensions.DependencyInjection;
 using Microsoft.Extensions.Options;
-using Spectre.Console;
 using WindowsIncidentAnalyzer.Configuration;
 using WindowsIncidentAnalyzer.Infrastructure;
 using WindowsIncidentAnalyzer.Services;
@@ -42,56 +41,84 @@ public static class CollectCommand
                     BatchSize = parse.GetValue(SharedCliOptions.BatchSize) ?? analyzer.Collection.DefaultBatchSize
                 };
 
-                var db = services.GetRequiredService<SqliteDatabase>();
+                var db = services.GetRequiredService<InvestigationDatabase>();
                 var count = await services.GetRequiredService<IEventIngestionService>().CollectAsync(request, token);
 
-                AnsiConsole.WriteLine();
-                AnsiConsole.Write(new Rule("[green]Collect complete[/]").RuleStyle("grey"));
-                AnsiConsole.MarkupLine($"Rows changed  : [bold]{count:N0}[/] (new or more complete events)");
-                AnsiConsole.MarkupLine($"Database      : {Markup.Escape(db.DatabasePath)}");
+                // Plain Console I/O — Spectre Markup/Rule hits GetBufferInfo and floods VS Output
+                // with first-chance IOException under the debugger.
+                WriteLine(string.Empty);
+                WriteLine("Collect complete");
+                WriteLine($"Rows changed  : {count:N0} (new or more complete events)");
+                WriteLine($"Database      : {db.DatabasePath}");
                 if (request.TimeRanges is { Count: > 0 } dates)
                 {
-                    AnsiConsole.MarkupLine($"Dates         : {Markup.Escape(DateRangeParser.DescribeLocal(dates))} (local)");
-                    AnsiConsole.MarkupLine($"Time range    : {request.FromUtc:yyyy-MM-dd HH:mm} UTC → {request.ToUtc:yyyy-MM-dd HH:mm} UTC");
+                    WriteLine($"Dates         : {DateRangeParser.DescribeLocal(dates)} (local)");
+                    WriteLine($"Time range    : {request.FromUtc:yyyy-MM-dd HH:mm} UTC → {request.ToUtc:yyyy-MM-dd HH:mm} UTC");
                 }
                 else if (request.FromUtc is { } from && request.ToUtc is { } to)
                 {
-                    AnsiConsole.MarkupLine($"Time range    : {from:yyyy-MM-dd HH:mm} UTC → {to:yyyy-MM-dd HH:mm} UTC");
+                    WriteLine($"Time range    : {from:yyyy-MM-dd HH:mm} UTC → {to:yyyy-MM-dd HH:mm} UTC");
                 }
                 else
                 {
-                    AnsiConsole.MarkupLine("Time range    : all recorded events");
+                    WriteLine("Time range    : all recorded events");
                 }
 
                 if (request.Limit is { } limit)
                 {
-                    AnsiConsole.MarkupLine($"Limit         : {limit:N0}");
+                    WriteLine($"Limit         : {limit:N0}");
                 }
 
                 foreach (var log in request.AccessDeniedLogs.Distinct())
                 {
-                    AnsiConsole.MarkupLine($"Skipped       : [yellow]{Markup.Escape(log)}[/] (access denied — run as Administrator)");
+                    WriteLine($"Skipped       : {log} (access denied — run as Administrator)");
                 }
 
                 foreach (var log in request.MissingLogs.Distinct())
                 {
-                    AnsiConsole.MarkupLine($"Skipped       : [yellow]{Markup.Escape(log)}[/] (not installed or not found)");
+                    WriteLine($"Skipped       : {log} (not installed or not found)");
                 }
 
                 if (string.IsNullOrWhiteSpace(request.LogName) && string.IsNullOrWhiteSpace(request.EvtxPath))
                 {
-                    AnsiConsole.MarkupLine("[grey]Sources: Security, System, Application, PowerShell, Sysmon.[/]");
+                    var sources = WindowsLogCatalog.ResolveCollectionLogs(
+                        request.LogName,
+                        analyzer.Collection.CollectAllLogs,
+                        analyzer.Collection.IncludeAnalyticDebugLogs,
+                        discoverFromEvtxFiles: false);
+
+                    if (analyzer.Collection.CollectAllLogs ||
+                        WindowsLogCatalog.IsAllLogsAlias(request.LogName))
+                    {
+                        WriteLine($"Sources: enabled Windows event log channels ({sources.Count:N0}).");
+                    }
+                    else
+                    {
+                        WriteLine($"Sources: {string.Join(", ", sources)}.");
+                    }
                 }
 
                 if (count == 0 && request.AccessDeniedLogs.Count > 0 && string.IsNullOrWhiteSpace(request.EvtxPath))
                 {
-                    AnsiConsole.MarkupLine("[grey]Tip: collect --log Application   or   collect --evtx C:\\Evidence\\Security.evtx[/]");
+                    WriteLine("Tip: collect --log Application   or   collect --evtx C:\\Evidence\\Security.evtx");
                 }
 
-                AnsiConsole.WriteLine();
+                WriteLine(string.Empty);
             }, ct);
         });
 
         return command;
+    }
+
+    private static void WriteLine(string message)
+    {
+        try
+        {
+            Console.Out.WriteLine(message);
+        }
+        catch
+        {
+            // Ignore detached console.
+        }
     }
 }

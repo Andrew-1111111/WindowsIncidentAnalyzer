@@ -1,3 +1,4 @@
+using WindowsIncidentAnalyzer.Infrastructure;
 using WindowsIncidentAnalyzer.Services;
 using WindowsIncidentAnalyzer.Tests.Fixtures;
 using Xunit;
@@ -93,11 +94,30 @@ public sealed class EventNormalizationTests
     }
 
     [Fact]
-    public void Describe_IncludesEventSemantics()
+    public void Describe_UsesHayabusaChannelMetadataWhenLoaded()
     {
-        var evt = _parser.Parse(EventXmlFixtures.FailedLogon("2026-08-01T08:03:00.0000000Z", "labuser", "10.0.0.50"));
-        var description = EventFieldMapper.Describe(evt);
-        Assert.Contains("4625", description);
-        Assert.Contains("failed logon", description, StringComparison.OrdinalIgnoreCase);
+        var dir = Path.Combine(Path.GetTempPath(), "wia-describe-" + Guid.NewGuid().ToString("N"));
+        Directory.CreateDirectory(dir);
+        try
+        {
+            File.WriteAllText(
+                Path.Combine(dir, "channel_eid_info.txt"),
+                "Security,4624,Successful Logon\n");
+            HayabusaEventMetadata.LoadFromConfigDirectory(dir);
+
+            var evt = new EventXmlParser().Parse(EventXmlFixtures.FailedLogon(
+                "2026-08-01T12:00:00.0000000Z",
+                "labuser",
+                "10.0.0.50"));
+            evt.EventId = 4624;
+            evt.LogName = "Security";
+
+            var description = EventFieldMapper.Describe(evt);
+            Assert.Contains("Successful Logon", description);
+        }
+        finally
+        {
+            Directory.Delete(dir, recursive: true);
+        }
     }
 }

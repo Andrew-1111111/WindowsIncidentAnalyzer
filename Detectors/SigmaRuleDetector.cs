@@ -1,5 +1,7 @@
+using System.Collections.Concurrent;
 using Microsoft.Extensions.Options;
 using WindowsIncidentAnalyzer.Configuration;
+using WindowsIncidentAnalyzer.Infrastructure;
 using WindowsIncidentAnalyzer.Models;
 using WindowsIncidentAnalyzer.Services;
 using WindowsIncidentAnalyzer.Sigma;
@@ -10,7 +12,8 @@ namespace WindowsIncidentAnalyzer.Detectors;
 public sealed class SigmaRuleDetector(
     ISigmaRuleService sigmaRules,
     SigmaRuleEngine engine,
-    IOptions<DetectionRulesOptions> options) : DetectorBase
+    IOptions<DetectionRulesOptions> options,
+    IOptions<AnalyzerOptions> analyzerOptions) : DetectorBase
 {
     public override string Name => "SigmaRules";
 
@@ -33,25 +36,35 @@ public sealed class SigmaRuleDetector(
     {
         if (!IsEnabled)
         {
-            yield break;
+            return [];
         }
 
         var rules = sigmaRules.GetRules();
         if (rules.Count == 0)
         {
-            yield break;
+            return [];
         }
 
-        foreach (var evt in events)
+        var eventList = events as IReadOnlyList<WindowsEvent> ?? events.ToList();
+        if (eventList.Count == 0)
         {
+            return [];
+        }
+
+        var analyzer = analyzerOptions.Value;
+        var findings = new ConcurrentBag<SecurityFinding>();
+
+        void EvaluateEvent(WindowsEvent evt)
+        {
+            var fields = SigmaEventMapper.Map(evt);
             foreach (var rule in rules)
             {
-                if (!engine.TryMatch(rule, evt, out var match) || match == null)
+                if (!engine.TryMatch(rule, evt, fields, out var match) || match == null)
                 {
                     continue;
                 }
 
-                yield return CreateFinding(
+                findings.Add(CreateFinding(
                     $"[Sigma] {rule.Title}",
                     string.IsNullOrWhiteSpace(rule.Description)
                         ? $"Sigma rule matched ({rule.Id ?? Path.GetFileName(rule.SourcePath)})."
@@ -59,9 +72,26 @@ public sealed class SigmaRuleDetector(
                     rule.Severity,
                     evt,
                     details: BuildLegacyDetails(rule, match),
-                    configureContext: ctx => ApplySigmaContext(ctx, rule, match));
+                    configureContext: ctx => ApplySigmaContext(ctx, rule, match)));
             }
         }
+
+        if (ParallelAnalysis.ShouldUseParallel(analyzer.MaxDegreeOfParallelism, eventList.Count))
+        {
+            Parallel.ForEach(eventList, ParallelAnalysis.CreateCpuBoundOptions(analyzer), EvaluateEvent);
+        }
+        else
+        {
+            foreach (var evt in eventList)
+            {
+                EvaluateEvent(evt);
+            }
+        }
+
+        return findings
+            .OrderByDescending(f => f.Severity)
+            .ThenBy(f => f.TimeUtc)
+            .ToList();
     }
 
     private static void ApplySigmaContext(FindingContext context, SigmaRule rule, SigmaMatchResult match)

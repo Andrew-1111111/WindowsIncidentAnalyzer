@@ -119,7 +119,7 @@ public static class Program
 
         AnsiConsole.MarkupLine(
             "[grey]Type a command (collect, analyze, timeline, search, stats, " +
-            "ioc, sigma, export) or [white]help[/] / [white]exit[/].[/]");
+            "ioc, sigma, mitre, cve, export) or [white]help[/] / [white]exit[/].[/]");
 
         AnsiConsole.WriteLine();
 

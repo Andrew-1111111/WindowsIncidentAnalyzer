@@ -110,6 +110,12 @@ public sealed class FindingContext
 
     public string? MitreTechnique { get; set; }
 
+    public string? MitreTechniqueName { get; set; }
+
+    public string? MitreTacticName { get; set; }
+
+    public string? MitreUrl { get; set; }
+
     public List<string> MatchedFields { get; set; } = [];
 
     public List<string> MatchedValues { get; set; } = [];

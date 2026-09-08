@@ -1,4 +1,3 @@
-using System.Text.Json;
 using WindowsIncidentAnalyzer.Models;
 
 namespace WindowsIncidentAnalyzer.Exporters;
@@ -64,6 +63,9 @@ internal static class ExportRowBuilder
                 SigmaStatus = CsvExportFormatting.Cell(ctx.SigmaStatus),
                 MitreTactic = CsvExportFormatting.Cell(ctx.MitreTactic),
                 MitreTechnique = CsvExportFormatting.Cell(ctx.MitreTechnique),
+                MitreTechniqueName = CsvExportFormatting.Cell(ctx.MitreTechniqueName),
+                MitreTacticName = CsvExportFormatting.Cell(ctx.MitreTacticName),
+                MitreUrl = CsvExportFormatting.Cell(ctx.MitreUrl),
                 MitreTags = CsvExportFormatting.FormatList(ctx.MitreTags),
                 MatchedSelection = CsvExportFormatting.Cell(ctx.MatchedSelection),
                 MatchedFields = CsvExportFormatting.FormatList(ctx.MatchedFields),
@@ -99,6 +101,24 @@ internal static class ExportRowBuilder
         {
             IocType = CsvExportFormatting.Cell(m.IocType),
             IocValue = CsvExportFormatting.Cell(m.IocValue),
+            EventId = m.EventId,
+            EventRowId = m.EventRowId,
+            TimestampUtc = CsvExportFormatting.FormatUtc(m.TimestampUtc),
+            Host = CsvExportFormatting.Cell(m.Host),
+            RelatedProcess = CsvExportFormatting.Cell(m.RelatedProcess),
+            RelatedUser = CsvExportFormatting.Cell(m.RelatedUser),
+            MatchedField = CsvExportFormatting.Cell(m.MatchedField)
+        });
+
+    public static IEnumerable<CveCsvRow> BuildCveRows(IReadOnlyList<CveMatch> matches) =>
+        matches.Select(m => new CveCsvRow
+        {
+            CveId = CsvExportFormatting.Cell(m.CveId),
+            VulnerabilityName = CsvExportFormatting.Cell(m.VulnerabilityName),
+            ShortDescription = CsvExportFormatting.Cell(m.ShortDescription),
+            VendorProject = CsvExportFormatting.Cell(m.VendorProject),
+            Product = CsvExportFormatting.Cell(m.Product),
+            KnownRansomwareUse = CsvExportFormatting.Cell(m.KnownRansomwareUse),
             EventId = m.EventId,
             EventRowId = m.EventRowId,
             TimestampUtc = CsvExportFormatting.FormatUtc(m.TimestampUtc),

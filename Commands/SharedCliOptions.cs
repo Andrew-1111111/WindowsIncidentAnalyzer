@@ -10,7 +10,7 @@ public static class SharedCliOptions
 {
     public static Option<string?> Log { get; } = new("--log")
     {
-        Description = "Event log alias or full channel name (Security/Безопасность, System/Система, Application/Приложение, Sysmon, PowerShell)."
+        Description = "Event log alias or full channel name (Security, System, Application, Sysmon, PowerShell, all)."
     };
 
     public static Option<int?> Hours { get; } = new("--hours")

@@ -38,6 +38,14 @@ internal static class InvestigationExportCollector
             }
         }
 
+        foreach (var match in data.CveMatches)
+        {
+            if (match.EventRowId > 0)
+            {
+                ids.Add(match.EventRowId);
+            }
+        }
+
         foreach (var item in data.Timeline)
         {
             if (item.EventRowId > 0)

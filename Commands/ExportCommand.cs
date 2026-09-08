@@ -20,6 +20,11 @@ public static class ExportCommand
             Description = "Output file path. CSV export writes Excel (.xlsx) files: findings, timeline, IOCs, correlations, events, statistics."
         };
         command.Options.Add(output);
+        command.Options.Add(SharedCliOptions.EventId);
+        command.Options.Add(SharedCliOptions.User);
+        command.Options.Add(SharedCliOptions.Ip);
+        command.Options.Add(SharedCliOptions.Process);
+        command.Options.Add(SharedCliOptions.Keyword);
         command.Options.Add(SharedCliOptions.Hours);
         command.Options.Add(SharedCliOptions.From);
         command.Options.Add(SharedCliOptions.To);
@@ -33,6 +38,11 @@ public static class ExportCommand
             {
                 var analyzer = services.GetRequiredService<IOptions<AnalyzerOptions>>().Value;
                 var filter = SharedCliOptions.BuildFilter(parse, analyzer, defaultHoursWhenMissing: false);
+                if (parse.GetValue(SharedCliOptions.Limit) is null)
+                {
+                    filter = filter with { Limit = analyzer.Collection.DefaultLimit };
+                }
+
                 var format = parse.GetValue(SharedCliOptions.Format) ?? "html";
                 var path = await services.GetRequiredService<IExportService>()
                     .ExportAsync(format, parse.GetValue(output), filter, token);

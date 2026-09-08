@@ -8,7 +8,7 @@ The tool is intended for incident response, DFIR, and threat hunting on systems 
 
 ## Features
 
-- Live collection from Security, System, Application, PowerShell, and Sysmon channels, or read-only EVTX import
+- Live collection from **all available Windows event log channels** by default (or a single channel / EVTX import)
 - SQLite-backed storage with normalized event fields and full property bags
 - **19 detection engines**: behavioral rules, known-threat signatures, and **Sigma** (SigmaHQ)
 - Structured findings (`FindingContext`) with event metadata, Sigma match details, and MITRE tags
@@ -40,7 +40,7 @@ The compiled executable is named `wia.exe`. Data and logs are stored next to the
 | Variant | Command | Notes |
 | --- | --- | --- |
 | **AnyCPU** (framework-dependent) | `dotnet publish -c Release` | Portable build; requires [.NET 9 runtime](https://dotnet.microsoft.com/download) |
-| **x64** (framework-dependent) | `dotnet publish -c Release -r win-x64 --self-contained false` | 64-bit Windows; requires .NET 9 runtime |
+| **x64** (framework-dependent) | `dotnet publish -c Release -r win-x64 --self-contained false` | 64-bit Windows; requires [.NET 9 runtime](https://dotnet.microsoft.com/download) |
 | **x64 self-contained** | `dotnet publish -c Release -r win-x64 --self-contained true` | 64-bit Windows; bundles the .NET runtime |
 
 ### GitHub Actions
@@ -101,6 +101,8 @@ On launch, the application can automatically:
 
 1. Download and import public **IOC feeds** (default: every 6 hours)
 2. Download **SigmaHQ** Windows rules into `data/sigma-rules/` (default: every 24 hours)
+3. Download **MITRE ATT&CK** enterprise bundle into `data/mitre/` (default: every 7 days)
+4. Download **CISA Known Exploited Vulnerabilities** catalog into SQLite (default: every 7 days)
 
 Settings in `Configuration/appsettings.json`:
 
@@ -108,12 +110,16 @@ Settings in `Configuration/appsettings.json`:
 "Startup": {
   "AutoUpdateIocFeeds": true,
   "AutoUpdateSigmaRules": true,
+  "AutoUpdateMitreAttack": true,
+  "AutoUpdateCveDatabase": true,
   "IocRefreshHours": 6,
-  "SigmaRefreshHours": 24
+  "SigmaRefreshHours": 24,
+  "MitreRefreshHours": 168,
+  "CveRefreshHours": 168
 }
 ```
 
-When feeds are cached, startup shows IOC and Sigma counts and the next refresh time. Sigma rules are loaded from disk into memory on every start.
+When feeds are cached, startup shows IOC, Sigma, MITRE, and CVE counts and the next refresh time.
 
 ## Commands
 
@@ -122,9 +128,11 @@ When feeds are cached, startup shows IOC and Sigma counts and the next refresh t
 | `collect` | Read live channels or a read-only EVTX file into SQLite |
 | `search` | Query collected events |
 | `timeline` | Chronological view, optional export |
-| `analyze` | Detection rules + IOC scan + correlation |
+| `analyze` | Detection rules + IOC/CVE scan + correlation |
 | `ioc import` / `ioc update` / `ioc scan` | Load, refresh, and match indicators |
 | `sigma load` / `sigma update` / `sigma list` / `sigma stats` | Manage Sigma rules |
+| `mitre load` / `mitre update` / `mitre lookup` / `mitre stats` | MITRE ATT&CK database |
+| `cve load` / `cve update` / `cve lookup` / `cve scan` / `cve stats` | CISA KEV CVE catalog |
 | `export` | JSON / HTML / Excel report |
 | `stats` | Event ID, user, process, IP, and finding counts |
 
@@ -134,6 +142,7 @@ Global time filters (most commands): `--hours`, `--from`, `--to`, `--date`, `--u
 
 ```bash
 wia collect --log Security
+wia collect --log all --hours 24
 wia collect --log Sysmon --hours 24
 wia collect --date 2026-08-29
 wia collect --from "2026-08-01 00:00:00" --to "2026-08-02 00:00:00"
@@ -141,7 +150,9 @@ wia collect --event-id 4624,4625,4688
 wia collect --evtx "C:\Evidence\Security.evtx" --batch-size 500 --limit 100000
 ```
 
-If `--log` is omitted, the collector tries **Security**, **Microsoft-Windows-PowerShell/Operational**, and **Microsoft-Windows-Sysmon/Operational**. Missing channels are skipped.
+If `--log` is omitted, the collector enumerates **every available event log channel** on the host (`CollectAllLogs: true` in `appsettings.json`). Use `--log all` for the same behavior explicitly, or `--log Security` / `Sysmon` / etc. for a single channel. Set `CollectAllLogs` to `false` to limit default collection to Security, System, Application, PowerShell, and Sysmon. Channels that cannot be opened (permissions, missing provider) are skipped.
+
+By default, `collect` reads **all recorded events** with no time window and no event cap. Use `--hours`, `--from` / `--to`, or `--date` to narrow the time range, and `--limit` to cap how many events are ingested. Parallel readers are capped when many channels are open; stuck channels time out after `ChannelReadTimeoutSeconds`.
 
 ### Search
 
@@ -203,7 +214,31 @@ wia sigma list --limit 20
 wia sigma stats
 ```
 
-Sigma rules are evaluated during `analyze` when `SigmaRules.Enabled` is true in `DetectionRules.json`. Matches populate `FindingContext` (matched fields/values, condition, MITRE tags, Sigma ID).
+Sigma rules are evaluated during `analyze` when `SigmaRules.Enabled` is true in `DetectionRules.json`. Matches populate `FindingContext` (matched fields/values, condition, MITRE tags, Sigma ID). MITRE technique/tactic IDs are enriched with human-readable names from the local ATT&CK database.
+
+### MITRE ATT&CK
+
+```bash
+wia mitre update
+wia mitre load data/mitre/enterprise-attack.json
+wia mitre lookup T1033
+wia mitre lookup attack.discovery
+wia mitre stats
+```
+
+Source: [mitre/cti](https://github.com/mitre/cti) `enterprise-attack.json` (STIX 2.1). During `analyze` and `export`, Sigma MITRE tags are resolved to technique names, tactic names, and ATT&CK URLs in `FindingContext`.
+
+### CVE (CISA KEV)
+
+```bash
+wia cve update
+wia cve load data/cve/known_exploited_vulnerabilities.json
+wia cve lookup CVE-2024-1234
+wia cve scan
+wia cve stats
+```
+
+Source: [CISA Known Exploited Vulnerabilities catalog](https://www.cisa.gov/known-exploited-vulnerabilities-catalog). `cve scan` and `analyze` search collected events for CVE IDs that appear in the catalog (command lines, script blocks, raw XML, properties).
 
 ### Export
 
@@ -221,7 +256,7 @@ Single file with the full investigation payload:
 - `filter` — query parameters used for export
 - `statistics` — counts by severity, event ID, user, process, IP, hour
 - `findings` — with complete `context` (event fields, Sigma, MITRE, raw event JSON, raw XML)
-- `correlations`, `iocMatches`, `timeline`
+- `correlations`, `iocMatches`, `cveMatches`, `timeline`
 - `events` — all normalized Windows events referenced by the above
 
 UTF-8 with readable Cyrillic (`UnsafeRelaxedJsonEscaping`).
@@ -244,6 +279,7 @@ Writes **Excel `.xlsx`** files with bold centered headers and auto-filter:
 | `*-findings.xlsx` | 56 columns: severity, IDs, rule metadata, event type, validation flags, process/network/file fields, Sigma/MITRE, raw evidence |
 | `*-timeline.xlsx` | Timeline items + event row ID |
 | `*-iocs.xlsx` | IOC matches + event row ID |
+| `*-cves.xlsx` | CVE matches (CISA KEV) + event row ID |
 | `*-correlations.xlsx` | Correlation chains + related event IDs |
 | `*-events.xlsx` | Full normalized events (35 columns) + properties JSON |
 | `*-statistics.xlsx` | Summary, filter, and all statistic breakdowns |

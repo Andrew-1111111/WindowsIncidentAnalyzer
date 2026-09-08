@@ -23,11 +23,7 @@ internal static class ExcelSheetWriter
 
     private static void Write<T>(string path, string sheetName, IReadOnlyList<T> rows, ClassMap<T> map)
     {
-        var directory = Path.GetDirectoryName(Path.GetFullPath(path));
-        if (!string.IsNullOrEmpty(directory))
-        {
-            Directory.CreateDirectory(directory);
-        }
+        ExportPath.EnsureDirectory(path);
 
         var columns = map.MemberMaps
             .OrderBy(m => m.Data.Index)

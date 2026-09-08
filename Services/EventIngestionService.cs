@@ -1,6 +1,5 @@
 using Microsoft.Extensions.Logging;
 using Microsoft.Extensions.Options;
-using Spectre.Console;
 using WindowsIncidentAnalyzer.Configuration;
 using WindowsIncidentAnalyzer.Infrastructure;
 using WindowsIncidentAnalyzer.Models;
@@ -58,17 +57,18 @@ public sealed class EventIngestionService(
         {
             if (ProcessElevation.IsAdministrator())
             {
-                AnsiConsole.MarkupLine("[grey]Running elevated: Security and Sysmon channels can be read.[/]");
+                WriteLine("Running elevated: Security and Sysmon channels can be read.");
             }
             else
             {
-                AnsiConsole.MarkupLine("[yellow]Running without Administrator.[/]");
-                AnsiConsole.MarkupLine("[grey]Security (and often Sysmon) will be skipped if access is denied.[/]");
-                AnsiConsole.MarkupLine("[grey]Application, System, PowerShell, and EVTX files do not require elevation.[/]");
+                WriteLine("Running without Administrator.");
+                WriteLine("Security (and often Sysmon) will be skipped if access is denied.");
+                WriteLine("Application, System, PowerShell, and EVTX files do not require elevation.");
             }
         }
 
         var batchSize = request.BatchSize > 0 ? request.BatchSize : options.Value.Collection.DefaultBatchSize;
+        var collection = options.Value.Collection;
         var source = string.IsNullOrWhiteSpace(request.EvtxPath)
             ? eventLog.CollectAsync(query, cancellationToken)
             : evtx.ParseFileAsync(request.EvtxPath, query, cancellationToken);
@@ -78,43 +78,60 @@ public sealed class EventIngestionService(
         var processed = 0;
         var skippedLogs = 0;
 
-        await AnsiConsole.Status()
-            .AutoRefresh(true)
-            .Spinner(Spinner.Known.Dots)
-            .StartAsync("Collecting Windows events...", async ctx =>
+        if (string.IsNullOrWhiteSpace(request.EvtxPath) &&
+            (string.IsNullOrWhiteSpace(request.LogName) || WindowsLogCatalog.IsAllLogsAlias(request.LogName)))
+        {
+            var channelCount = WindowsLogCatalog.ResolveCollectionLogs(
+                request.LogName,
+                collection.CollectAllLogs,
+                collection.IncludeAnalyticDebugLogs,
+                discoverFromEvtxFiles: false).Count;
+            if (ParallelAnalysis.ShouldUseParallel(options.Value, channelCount))
             {
-                await foreach (var evt in source.WithCancellation(cancellationToken))
-                {
-                    batch.Add(evt);
-                    if (batch.Count < batchSize)
-                    {
-                        continue;
-                    }
+                var workers = ParallelAnalysis.ResolveCollectionParallelism(options.Value, channelCount);
+                WriteLine($"Collecting Windows events in parallel ({channelCount} channel(s), {workers} worker(s))...");
+            }
+            else
+            {
+                WriteLine("Collecting Windows events...");
+            }
+        }
+        else
+        {
+            WriteLine("Collecting Windows events...");
+        }
 
-                    try
-                    {
-                        processed += batch.Count;
-                        total += await repository.InsertBatchAsync(batch, cancellationToken);
-                        ctx.Status($"Collecting... {processed:N0} processed, {total:N0} stored or updated");
-                    }
-                    catch (Exception ex)
-                    {
-                        logger.LogError(ex, "Failed to insert a batch of {Count} events", batch.Count);
-                        skippedLogs += batch.Count;
-                    }
+        await foreach (var evt in source.WithCancellation(cancellationToken))
+        {
+            batch.Add(evt);
+            if (batch.Count < batchSize)
+            {
+                continue;
+            }
 
-                    batch.Clear();
-                }
+            try
+            {
+                processed += batch.Count;
+                total += await repository.InsertBatchAsync(batch, cancellationToken);
+                WriteProgress(processed, total);
+            }
+            catch (Exception ex)
+            {
+                logger.LogError(ex, "Failed to insert a batch of {Count} events", batch.Count);
+                skippedLogs += batch.Count;
+            }
 
-                if (batch.Count > 0)
-                {
-                    processed += batch.Count;
-                    total += await repository.InsertBatchAsync(batch, cancellationToken);
-                    ctx.Status($"Collecting... {processed:N0} processed, {total:N0} stored or updated");
-                }
-            });
+            batch.Clear();
+        }
 
-        AnsiConsole.WriteLine();
+        if (batch.Count > 0)
+        {
+            processed += batch.Count;
+            total += await repository.InsertBatchAsync(batch, cancellationToken);
+            WriteProgress(processed, total);
+        }
+
+        EndProgressLine();
 
         if (skippedLogs > 0)
         {
@@ -123,5 +140,63 @@ public sealed class EventIngestionService(
 
         logger.LogInformation("Ingested {Count} events", total);
         return total;
+    }
+
+    private static void WriteProgress(int processed, int total)
+    {
+        var message = $"Collecting... {processed:N0} processed, {total:N0} stored or updated";
+        try
+        {
+            if (!Console.IsOutputRedirected)
+            {
+                // Same single status line as Spectre Status (without GetBufferInfo noise).
+                Console.Out.Write('\r');
+                Console.Out.Write(message);
+                if (message.Length < 80)
+                {
+                    Console.Out.Write(new string(' ', 80 - message.Length));
+                }
+
+                Console.Out.Flush();
+                return;
+            }
+
+            Console.Out.WriteLine(message);
+        }
+        catch
+        {
+            // Console may be detached under some hosts; never fail collect for UI.
+        }
+    }
+
+    private static void EndProgressLine()
+    {
+        try
+        {
+            if (!Console.IsOutputRedirected)
+            {
+                Console.Out.WriteLine();
+            }
+            else
+            {
+                Console.Out.WriteLine();
+            }
+        }
+        catch
+        {
+            // Ignore detached console.
+        }
+    }
+
+    private static void WriteLine(string message)
+    {
+        try
+        {
+            Console.Out.WriteLine(message);
+        }
+        catch
+        {
+            // Console may be detached under some hosts; never fail collect for UI.
+        }
     }
 }

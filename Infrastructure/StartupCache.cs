@@ -1,5 +1,4 @@
 using System.Text.Json;
-using WindowsIncidentAnalyzer.Infrastructure;
 
 namespace WindowsIncidentAnalyzer.Infrastructure;
 
@@ -10,6 +9,10 @@ public sealed class StartupCache
     public DateTime? IocUpdatedUtc { get; set; }
 
     public DateTime? SigmaUpdatedUtc { get; set; }
+
+    public DateTime? MitreUpdatedUtc { get; set; }
+
+    public DateTime? CveUpdatedUtc { get; set; }
 
     public static string CachePath => Path.Combine(AppPaths.DataDirectory, "startup-cache.json");
 
@@ -44,11 +47,16 @@ public sealed class StartupCache
         }
     }
 
-    public bool ShouldRefreshIoc(int refreshHours) =>
-        refreshHours <= 0 || IocUpdatedUtc is not { } updated ||
-        DateTime.UtcNow - updated >= TimeSpan.FromHours(refreshHours);
+    public bool ShouldRefreshIoc(int refreshHours) => ShouldRefresh(IocUpdatedUtc, refreshHours);
 
-    public bool ShouldRefreshSigma(int refreshHours) =>
-        refreshHours <= 0 || SigmaUpdatedUtc is not { } updated ||
+    public bool ShouldRefreshSigma(int refreshHours) => ShouldRefresh(SigmaUpdatedUtc, refreshHours);
+
+    public bool ShouldRefreshMitre(int refreshHours) => ShouldRefresh(MitreUpdatedUtc, refreshHours);
+
+    public bool ShouldRefreshCve(int refreshHours) => ShouldRefresh(CveUpdatedUtc, refreshHours);
+
+    private static bool ShouldRefresh(DateTime? updatedUtc, int refreshHours) =>
+        refreshHours <= 0 ||
+        updatedUtc is not { } updated ||
         DateTime.UtcNow - updated >= TimeSpan.FromHours(refreshHours);
 }

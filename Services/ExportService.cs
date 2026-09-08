@@ -1,4 +1,5 @@
 using WindowsIncidentAnalyzer.Exporters;
+using WindowsIncidentAnalyzer.Infrastructure;
 using WindowsIncidentAnalyzer.Models;
 using WindowsIncidentAnalyzer.Repositories;
 
@@ -9,9 +10,11 @@ public sealed class ExportService(
     IFindingRepository findings,
     ICorrelationRepository correlations,
     IIocDetectionService iocs,
+    ICveDetectionService cves,
     ITimelineService timeline,
     IStatisticsService statistics,
-    IEventRepository events) : IExportService
+    IEventRepository events,
+    IMitreAttackEnrichmentService mitreEnrichment) : IExportService
 {
     public async Task<string> ExportAsync(string format, string? outputPath, EventQueryFilter filter, CancellationToken cancellationToken)
     {
@@ -27,8 +30,26 @@ public sealed class ExportService(
         }
 
         var findingsList = await findings.GetAllAsync(50_000, cancellationToken);
+        mitreEnrichment.Enrich(findingsList);
+        if (ExportQueryFilter.HasCriteria(filter))
+        {
+            findingsList = ExportQueryFilter.FilterFindings(findingsList, filter);
+        }
+
         var correlationsList = await correlations.GetAllAsync(50_000, cancellationToken);
+        if (ExportQueryFilter.HasCriteria(filter))
+        {
+            correlationsList = ExportQueryFilter.FilterCorrelations(correlationsList, filter);
+        }
+
         var iocMatches = await iocs.ScanAsync(filter, cancellationToken);
+        var cveMatches = await cves.ScanAsync(filter, cancellationToken);
+        if (ExportQueryFilter.HasCriteria(filter))
+        {
+            iocMatches = ExportQueryFilter.FilterIocMatches(iocMatches, filter);
+            cveMatches = ExportQueryFilter.FilterCveMatches(cveMatches, filter);
+        }
+
         var timelineItems = await timeline.BuildAsync(
             filter with { Limit = filter.Limit <= 0 ? 50_000 : filter.Limit },
             cancellationToken);
@@ -42,6 +63,7 @@ public sealed class ExportService(
             Findings = findingsList,
             Correlations = correlationsList,
             IocMatches = iocMatches,
+            CveMatches = cveMatches,
             Timeline = timelineItems
         };
 
@@ -53,6 +75,7 @@ public sealed class ExportService(
                 .OrderBy(evt => evt.TimeCreatedUtc)
                 .ThenBy(evt => evt.Id)
                 .ToList();
+            FindingContextHydrator.FillGaps(findingsList, eventMap);
         }
 
         await exporter.ExportAsync(data, path, cancellationToken);

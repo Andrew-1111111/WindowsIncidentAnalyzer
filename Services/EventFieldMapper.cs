@@ -267,12 +267,15 @@ public static class EventFieldMapper
     {
         foreach (var name in names)
         {
-            if (properties.TryGetValue(name, out var value))
+            foreach (var lookup in HayabusaEventMetadata.GetLookupNames(name))
             {
-                var cleaned = NullableText.Clean(value);
-                if (cleaned != null)
+                if (properties.TryGetValue(lookup, out var value))
                 {
-                    return cleaned;
+                    var cleaned = NullableText.Clean(value);
+                    if (cleaned != null)
+                    {
+                        return cleaned;
+                    }
                 }
             }
         }
@@ -309,6 +312,13 @@ public static class EventFieldMapper
         var sb = new StringBuilder();
         sb.Append(evt.ProviderName ?? evt.LogName ?? "Event");
         sb.Append(" / ").Append(evt.EventId);
+
+        if (HayabusaEventMetadata.TryGetEventTitle(evt.LogName, evt.EventId, out var hayabusaTitle))
+        {
+            sb.Append(' ').Append(hayabusaTitle);
+            return sb.ToString();
+        }
+
         switch (evt.EventId)
         {
             case 4624:

@@ -33,7 +33,11 @@ public sealed class SigmaRuleDetectorTests
     {
         var rule = new SigmaYamlParser().ParseDocuments(WhoamiRule, "sample.yml").Single();
         var service = new StubSigmaRuleService([rule]);
-        var detector = new SigmaRuleDetector(service, new SigmaRuleEngine(), CreateEnabledOptions());
+        var detector = new SigmaRuleDetector(
+            service,
+            new SigmaRuleEngine(),
+            CreateEnabledOptions(),
+            Options.Create(new AnalyzerOptions { MaxDegreeOfParallelism = 1 }));
         var evt = new WindowsEvent
         {
             Id = 42,
@@ -82,6 +86,9 @@ public sealed class SigmaRuleDetectorTests
             Task.FromResult(rules.Count);
 
         public Task<int> UpdateFromSigmaHqAsync(CancellationToken cancellationToken) =>
+            Task.FromResult(rules.Count);
+
+        public Task<int> UpdateFromHayabusaRulesAsync(CancellationToken cancellationToken) =>
             Task.FromResult(rules.Count);
     }
 

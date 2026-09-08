@@ -10,7 +10,10 @@ public static class LoggingConfiguration
     public static void Configure(HostApplicationBuilder builder)
     {
         builder.Logging.ClearProviders();
+        builder.Logging.AddConfiguration(builder.Configuration.GetSection("Logging"));
         builder.Logging.SetMinimumLevel(LogLevel.Information);
+        builder.Logging.AddFilter("System.Net.Http", LogLevel.Warning);
+        builder.Logging.AddFilter("Polly", LogLevel.Warning);
 
         // Do not write ILogger to stdout: Spectre.Console live status would share the same
         // line with SimpleConsole and produce unreadable concatenated output.

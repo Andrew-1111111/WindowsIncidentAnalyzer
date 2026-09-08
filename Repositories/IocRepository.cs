@@ -1,10 +1,13 @@
-using Microsoft.Data.Sqlite;
+using Microsoft.EntityFrameworkCore;
+using WindowsIncidentAnalyzer.Data;
 using WindowsIncidentAnalyzer.Infrastructure;
 using WindowsIncidentAnalyzer.Models;
 
 namespace WindowsIncidentAnalyzer.Repositories;
 
-public sealed class IocRepository(SqliteDatabase database) : IIocRepository
+public sealed class IocRepository(
+    IDbContextFactory<InvestigationDbContext> dbFactory,
+    InvestigationDatabase database) : IIocRepository
 {
     private const int BatchSize = 250;
 
@@ -15,104 +18,67 @@ public sealed class IocRepository(SqliteDatabase database) : IIocRepository
             return;
         }
 
-        await using var connection = await database.OpenConnectionAsync(cancellationToken);
-        await using var tx = (SqliteTransaction)await connection.BeginTransactionAsync(cancellationToken);
-        await using var cmd = connection.CreateCommand();
-        cmd.Transaction = tx;
-        cmd.CommandText = """
-            INSERT INTO Iocs (Type, Value, Source, Comment, ImportedUtc)
-            VALUES ($type, $value, $source, $comment, $imported)
-            ON CONFLICT(Type, Value) DO UPDATE SET
-                Source = excluded.Source,
-                Comment = excluded.Comment,
-                ImportedUtc = excluded.ImportedUtc;
-            """;
+        await database.EnsureInitializedAsync(cancellationToken);
+        await using var db = await dbFactory.CreateDbContextAsync(cancellationToken);
 
-        var type = cmd.Parameters.Add("$type", SqliteType.Text);
-        var value = cmd.Parameters.Add("$value", SqliteType.Text);
-        var source = cmd.Parameters.Add("$source", SqliteType.Text);
-        var comment = cmd.Parameters.Add("$comment", SqliteType.Text);
-        var imported = cmd.Parameters.Add("$imported", SqliteType.Text);
+        var types = iocs.Select(i => i.Type.Trim().ToLowerInvariant()).Distinct().ToList();
+        var values = iocs.Select(i => i.Value.Trim()).Distinct().ToList();
+
+        var existing = await db.Iocs
+            .Where(i => types.Contains(i.Type) && values.Contains(i.Value))
+            .ToListAsync(cancellationToken);
+
+        var existingMap = existing.ToDictionary(i => (i.Type, i.Value));
 
         foreach (var ioc in iocs)
         {
-            type.Value = ioc.Type.Trim().ToLowerInvariant();
-            value.Value = ioc.Value.Trim();
-            source.Value = (object?)ioc.Source ?? DBNull.Value;
-            comment.Value = (object?)ioc.Comment ?? DBNull.Value;
-            imported.Value = DateTimeParser.Iso(ioc.ImportedUtc);
-            await cmd.ExecuteNonQueryAsync(cancellationToken);
+            var type = ioc.Type.Trim().ToLowerInvariant();
+            var value = ioc.Value.Trim();
+            var key = (type, value);
+            if (existingMap.TryGetValue(key, out var row))
+            {
+                row.Source = ioc.Source;
+                row.Comment = ioc.Comment;
+                row.ImportedUtc = ioc.ImportedUtc;
+            }
+            else
+            {
+                var entity = EntityMappers.ToEntity(ioc);
+                db.Iocs.Add(entity);
+                existingMap[key] = entity;
+            }
         }
 
-        await tx.CommitAsync(cancellationToken);
+        await db.SaveChangesAsync(cancellationToken);
     }
 
     public async Task ReplaceAllAsync(IReadOnlyList<Ioc> iocs, CancellationToken cancellationToken)
     {
-        await using var connection = await database.OpenConnectionAsync(cancellationToken);
-        await using var tx = (SqliteTransaction)await connection.BeginTransactionAsync(cancellationToken);
-        await using (var delete = connection.CreateCommand())
-        {
-            delete.Transaction = tx;
-            delete.CommandText = "DELETE FROM Iocs;";
-            await delete.ExecuteNonQueryAsync(cancellationToken);
-        }
+        await database.EnsureInitializedAsync(cancellationToken);
+        await using var db = await dbFactory.CreateDbContextAsync(cancellationToken);
+        await using var tx = await db.Database.BeginTransactionAsync(cancellationToken);
 
-        await InsertBatchesAsync(connection, tx, iocs, cancellationToken);
-        await tx.CommitAsync(cancellationToken);
-    }
+        await db.Iocs.ExecuteDeleteAsync(cancellationToken);
 
-    private static async Task InsertBatchesAsync(
-        SqliteConnection connection,
-        SqliteTransaction tx,
-        IReadOnlyList<Ioc> iocs,
-        CancellationToken cancellationToken)
-    {
         for (var offset = 0; offset < iocs.Count; offset += BatchSize)
         {
-            var batch = iocs.Skip(offset).Take(BatchSize).ToList();
-            await using var cmd = connection.CreateCommand();
-            cmd.Transaction = tx;
-
-            var values = new List<string>(batch.Count);
-            for (var i = 0; i < batch.Count; i++)
-            {
-                var ioc = batch[i];
-                values.Add($"($t{i}, $v{i}, $s{i}, $c{i}, $iu{i})");
-                cmd.Parameters.AddWithValue($"$t{i}", ioc.Type.Trim().ToLowerInvariant());
-                cmd.Parameters.AddWithValue($"$v{i}", ioc.Value.Trim());
-                cmd.Parameters.AddWithValue($"$s{i}", (object?)ioc.Source ?? DBNull.Value);
-                cmd.Parameters.AddWithValue($"$c{i}", (object?)ioc.Comment ?? DBNull.Value);
-                cmd.Parameters.AddWithValue($"$iu{i}", DateTimeParser.Iso(ioc.ImportedUtc));
-            }
-
-            cmd.CommandText =
-                "INSERT INTO Iocs (Type, Value, Source, Comment, ImportedUtc) VALUES " +
-                string.Join(", ", values);
-            await cmd.ExecuteNonQueryAsync(cancellationToken);
+            var batch = iocs.Skip(offset).Take(BatchSize).Select(EntityMappers.ToEntity).ToList();
+            db.Iocs.AddRange(batch);
+            await db.SaveChangesAsync(cancellationToken);
+            db.ChangeTracker.Clear();
         }
+
+        await tx.CommitAsync(cancellationToken);
     }
 
     public async Task<IReadOnlyList<Ioc>> GetAllAsync(CancellationToken cancellationToken)
     {
-        await using var connection = await database.OpenConnectionAsync(cancellationToken);
-        await using var cmd = connection.CreateCommand();
-        cmd.CommandText = "SELECT * FROM Iocs ORDER BY Type, Value";
-        var list = new List<Ioc>();
-        await using var reader = await cmd.ExecuteReaderAsync(cancellationToken);
-        while (await reader.ReadAsync(cancellationToken))
-        {
-            list.Add(new Ioc
-            {
-                Id = reader.GetInt64(reader.GetOrdinal("Id")),
-                Type = reader["Type"] as string ?? string.Empty,
-                Value = reader["Value"] as string ?? string.Empty,
-                Source = reader["Source"] as string,
-                Comment = reader["Comment"] as string,
-                ImportedUtc = DateTimeParser.Parse(reader["ImportedUtc"] as string) ?? DateTime.UtcNow
-            });
-        }
-
-        return list;
+        await database.EnsureInitializedAsync(cancellationToken);
+        await using var db = await dbFactory.CreateDbContextAsync(cancellationToken);
+        var rows = await db.Iocs.AsNoTracking()
+            .OrderBy(i => i.Type)
+            .ThenBy(i => i.Value)
+            .ToListAsync(cancellationToken);
+        return rows.ConvertAll(EntityMappers.ToDomain);
     }
 }

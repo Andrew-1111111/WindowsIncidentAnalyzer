@@ -1,4 +1,5 @@
 using System.Text;
+using WindowsIncidentAnalyzer.Infrastructure;
 using WindowsIncidentAnalyzer.Models;
 
 namespace WindowsIncidentAnalyzer.Sigma;
@@ -62,6 +63,8 @@ public static class SigmaEventMapper
             Add(key, value);
         }
 
+        HayabusaEventMetadata.ApplyFieldAliases(fields);
+
         var blob = BuildSearchBlob(evt, fields);
         Add("_sigma_blob", blob);
         return fields;
@@ -69,9 +72,12 @@ public static class SigmaEventMapper
 
     public static string? ResolveField(IReadOnlyDictionary<string, string> fields, string fieldName)
     {
-        if (fields.TryGetValue(fieldName, out var direct))
+        foreach (var lookup in HayabusaEventMetadata.GetLookupNames(fieldName))
         {
-            return direct;
+            if (fields.TryGetValue(lookup, out var direct))
+            {
+                return direct;
+            }
         }
 
         if (fieldName.Contains('.', StringComparison.Ordinal))

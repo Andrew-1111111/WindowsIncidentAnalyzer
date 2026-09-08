@@ -1,4 +1,5 @@
 using System.Globalization;
+using System.Xml;
 using System.Xml.Linq;
 using WindowsIncidentAnalyzer.Infrastructure;
 using WindowsIncidentAnalyzer.Models;
@@ -16,51 +17,95 @@ public sealed class EventXmlParser
             throw new ArgumentException("Event XML is empty.", nameof(xml));
         }
 
-        XDocument document;
+        return TryParseCore(xml)
+            ?? throw new InvalidOperationException("Event XML could not be parsed.");
+    }
+
+    public WindowsEvent? TryParse(string xml) =>
+        string.IsNullOrWhiteSpace(xml) ? null : TryParseCore(xml);
+
+    private WindowsEvent? TryParseCore(string xml)
+    {
+        if (!TryLoadDocument(xml, out var document, out var root))
+        {
+            return null;
+        }
+
         try
         {
-            document = XDocument.Parse(xml, LoadOptions.None);
+            var system = FindChild(root, "System");
+            var properties = ExtractProperties(FindChild(root, "EventData"));
+            foreach (var (key, value) in ExtractProperties(FindChild(root, "UserData")))
+            {
+                properties.TryAdd(key, value);
+            }
+
+            var eventIdElement = system?.Elements().FirstOrDefault(e => e.Name.LocalName == "EventID");
+            var qualifiers = eventIdElement?.Attribute("Qualifiers")?.Value;
+
+            var evt = new WindowsEvent
+            {
+                RawXml = xml,
+                Properties = properties,
+                LogName = NullableText.Clean(FindChild(system, "Channel")?.Value),
+                ProviderName = NullableText.Clean(FindChild(system, "Provider")?.Attribute("Name")?.Value),
+                EventId = ParseInt(eventIdElement?.Value) ?? 0,
+                EventRecordId = ParseLong(FindChild(system, "EventRecordID")?.Value),
+                TimeCreatedUtc = ParseTimestamp(FindChild(system, "TimeCreated")?.Attribute("SystemTime")?.Value),
+                Level = MapLevel(FindChild(system, "Level")?.Value),
+                ComputerName = NullableText.Clean(FindChild(system, "Computer")?.Value)
+            };
+
+            var userId = NullableText.Clean(FindChild(system, "Security")?.Attribute("UserID")?.Value);
+            if (userId != null)
+            {
+                evt.Properties["SecurityUserId"] = userId;
+            }
+
+            if (!string.IsNullOrEmpty(qualifiers))
+            {
+                evt.Properties["EventIdQualifiers"] = qualifiers;
+            }
+
+            EventFieldMapper.Apply(evt);
+            return evt;
         }
-        catch (Exception ex)
+        catch
         {
-            throw new InvalidOperationException("Event XML could not be parsed.", ex);
+            return null;
         }
-
-        var root = document.Root ?? throw new InvalidOperationException("Event XML has no root element.");
-        var system = root.Element(EventNs + "System");
-        var eventData = root.Element(EventNs + "EventData") ?? root.Element(EventNs + "UserData");
-
-        var properties = ExtractProperties(eventData);
-        var eventIdElement = system?.Element(EventNs + "EventID");
-        var qualifiers = eventIdElement?.Attribute("Qualifiers")?.Value;
-
-        var evt = new WindowsEvent
-        {
-            RawXml = xml,
-            Properties = properties,
-            LogName = NullableText.Clean(system?.Element(EventNs + "Channel")?.Value),
-            ProviderName = NullableText.Clean(system?.Element(EventNs + "Provider")?.Attribute("Name")?.Value),
-            EventId = ParseInt(eventIdElement?.Value) ?? 0,
-            EventRecordId = ParseLong(system?.Element(EventNs + "EventRecordID")?.Value),
-            TimeCreatedUtc = ParseTimestamp(system?.Element(EventNs + "TimeCreated")?.Attribute("SystemTime")?.Value),
-            Level = MapLevel(system?.Element(EventNs + "Level")?.Value),
-            ComputerName = NullableText.Clean(system?.Element(EventNs + "Computer")?.Value)
-        };
-
-        var userId = NullableText.Clean(system?.Element(EventNs + "Security")?.Attribute("UserID")?.Value);
-        if (userId != null)
-        {
-            evt.Properties["SecurityUserId"] = userId;
-        }
-
-        if (!string.IsNullOrEmpty(qualifiers))
-        {
-            evt.Properties["EventIdQualifiers"] = qualifiers;
-        }
-
-        EventFieldMapper.Apply(evt);
-        return evt;
     }
+
+    private static bool TryLoadDocument(string xml, out XDocument document, out XElement root)
+    {
+        document = null!;
+        root = null!;
+        try
+        {
+            using var textReader = new StringReader(xml);
+            using var xmlReader = XmlReader.Create(textReader, new XmlReaderSettings
+            {
+                CheckCharacters = false,
+                DtdProcessing = DtdProcessing.Prohibit,
+                XmlResolver = null
+            });
+            document = XDocument.Load(xmlReader, LoadOptions.None);
+            if (document.Root is not { } loadedRoot)
+            {
+                return false;
+            }
+
+            root = loadedRoot;
+            return true;
+        }
+        catch
+        {
+            return false;
+        }
+    }
+
+    private static XElement? FindChild(XElement? parent, string localName) =>
+        parent?.Elements().FirstOrDefault(element => element.Name.LocalName == localName);
 
     public static Dictionary<string, string> ExtractProperties(XElement? eventData)
     {
@@ -71,32 +116,30 @@ public sealed class EventXmlParser
         }
 
         var unnamedIndex = 0;
-        foreach (var data in eventData.Descendants().Where(e => e.Name.LocalName == "Data" || e.Name.LocalName.Length > 0))
+        foreach (var data in eventData.Descendants())
         {
-            if (data.Name.LocalName is "EventData" or "UserData")
+            if (data.Name.LocalName is "EventData" or "UserData" or "Binary")
             {
                 continue;
             }
 
             if (data.Name.LocalName != "Data" && data.HasElements)
             {
+                AddNestedProperties(data, properties, prefix: null);
                 continue;
             }
 
             var name = data.Attribute("Name")?.Value;
             if (string.IsNullOrWhiteSpace(name))
             {
-                if (data.Name.LocalName != "Data")
-                {
-                    name = data.Name.LocalName;
-                }
-                else
-                {
-                    name = $"Data{unnamedIndex++}";
-                }
+                name = data.Name.LocalName != "Data"
+                    ? data.Name.LocalName
+                    : $"Data{unnamedIndex++}";
             }
 
-            var value = data.Value;
+            var value = data.Name.LocalName == "Binary"
+                ? FormatBinaryValue(data.Value)
+                : data.Value;
             if (string.IsNullOrEmpty(value))
             {
                 continue;
@@ -106,6 +149,47 @@ public sealed class EventXmlParser
         }
 
         return properties;
+    }
+
+    private static string? FormatBinaryValue(string? value)
+    {
+        if (string.IsNullOrWhiteSpace(value))
+        {
+            return null;
+        }
+
+        try
+        {
+            return Convert.ToHexString(Convert.FromBase64String(value.Trim()));
+        }
+        catch
+        {
+            return value.Trim();
+        }
+    }
+
+    private static void AddNestedProperties(
+        XElement element,
+        Dictionary<string, string> properties,
+        string? prefix)
+    {
+        foreach (var child in element.Elements())
+        {
+            var name = string.IsNullOrEmpty(prefix)
+                ? child.Name.LocalName
+                : $"{prefix}.{child.Name.LocalName}";
+
+            if (child.HasElements)
+            {
+                AddNestedProperties(child, properties, name);
+                continue;
+            }
+
+            if (!string.IsNullOrEmpty(child.Value))
+            {
+                properties.TryAdd(name, child.Value);
+            }
+        }
     }
 
     public static int? ParseInt(string? value)

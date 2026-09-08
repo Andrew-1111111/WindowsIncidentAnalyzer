@@ -20,21 +20,24 @@ public sealed class SuspiciousActivityService(
     public async Task<IReadOnlyList<SecurityFinding>> AnalyzeAsync(EventQueryFilter? filter, CancellationToken cancellationToken)
     {
         var enabled = detectors.Where(d => d.IsEnabled).ToList();
-        var analysis = options.Value.Analysis;
+        var analyzer = options.Value;
+        var useParallel = ParallelAnalysis.ShouldUseParallel(analyzer.MaxDegreeOfParallelism, enabled.Count);
         logger.LogInformation(
             "Running {Count} enabled detection rules (parallel={Parallel}, workers={Workers})",
             enabled.Count,
-            analysis.EnableParallelAnalysis,
-            ParallelAnalysis.ResolveMaxDegreeOfParallelism(analysis));
+            useParallel,
+            useParallel
+                ? ParallelAnalysis.ResolveBoundedParallelism(analyzer.MaxDegreeOfParallelism, enabled.Count)
+                : 1);
 
         var cache = await LoadEventCacheAsync(enabled, filter, cancellationToken);
         List<SecurityFinding> findings;
 
-        if (analysis.EnableParallelAnalysis && enabled.Count > 1)
+        if (useParallel)
         {
             cancellationToken.ThrowIfCancellationRequested();
             var bag = new ConcurrentBag<SecurityFinding>();
-            var parallelOptions = ParallelAnalysis.CreateCpuBoundOptions(analysis);
+            var parallelOptions = ParallelAnalysis.CreateCpuBoundOptions(analyzer);
             Parallel.ForEach(enabled, parallelOptions, detector =>
             {
                 foreach (var finding in RunDetector(detector, cache))

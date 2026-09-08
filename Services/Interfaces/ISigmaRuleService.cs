@@ -8,6 +8,8 @@ public interface ISigmaRuleService
 
     Task<int> UpdateFromSigmaHqAsync(CancellationToken cancellationToken);
 
+    Task<int> UpdateFromHayabusaRulesAsync(CancellationToken cancellationToken);
+
     Task EnsureLoadedAsync(CancellationToken cancellationToken);
 
     IReadOnlyList<SigmaRule> GetRules();

@@ -86,11 +86,14 @@ wia --skip-bootstrap analyze
 
 ```bash
 wia collect --log Security --hours 24
+wia collect --log all --hours 24
 wia collect --date 2026-08-29
 wia collect --evtx "C:\Evidence\Security.evtx"
 ```
 
-Без `--log` собираются Security, PowerShell Operational и Sysmon (отсутствующие журналы пропускаются).
+Без `--log` собираются **все доступные каналы** журнала событий Windows (`CollectAllLogs: true` в `appsettings.json`). `--log all` — то же явно; `--log Security` и т.д. — один канал. При `CollectAllLogs: false` по умолчанию — Security, System, Application, PowerShell и Sysmon. Недоступные каналы пропускаются.
+
+По умолчанию `collect` читает **все события за всё время** без лимита. Ограничить период: `--hours`, `--from` / `--to`, `--date`; ограничить число событий: `--limit`.
 
 ### Analyze
 

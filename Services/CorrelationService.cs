@@ -25,7 +25,7 @@ public sealed class CorrelationService(
     {
         var list = events.OrderBy(e => e.TimeCreatedUtc).ToList();
         var window = TimeSpan.FromMinutes(Math.Max(1, options.Value.Correlation.CorrelationWindowMinutes));
-        var analysis = analyzerOptions.Value.Analysis;
+        var analyzer = analyzerOptions.Value;
         var results = new List<EventCorrelation>();
 
         var correlators = new Func<List<WindowsEvent>, TimeSpan, IEnumerable<EventCorrelation>>[]
@@ -38,10 +38,10 @@ public sealed class CorrelationService(
             ServiceInstallationToProcess
         };
 
-        if (analysis.EnableParallelAnalysis && correlators.Length > 1)
+        if (ParallelAnalysis.ShouldUseParallel(analyzer.MaxDegreeOfParallelism, correlators.Length))
         {
             var bag = new ConcurrentBag<EventCorrelation>();
-            var parallelOptions = ParallelAnalysis.CreateCpuBoundOptions(analysis);
+            var parallelOptions = ParallelAnalysis.CreateCpuBoundOptions(analyzer);
             Parallel.ForEach(correlators, parallelOptions, correlator =>
             {
                 foreach (var chain in correlator(list, window))

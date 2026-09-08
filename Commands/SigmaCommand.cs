@@ -31,14 +31,14 @@ public static class SigmaCommand
             }, ct);
         });
 
-        var update = new Command("update", "Download SigmaHQ Windows rules and load them.");
+        var update = new Command("update", "Download Hayabusa curated Sigma/native rules and load them.");
         update.SetAction(async (parse, ct) =>
         {
             var handler = services.GetRequiredService<CliErrorHandler>();
             return await handler.RunAsync(async token =>
             {
-                var count = await services.GetRequiredService<ISigmaRuleService>().UpdateFromSigmaHqAsync(token);
-                AnsiConsole.MarkupLine($"[green]Loaded {count:N0} Sigma rule(s)[/] from SigmaHQ.");
+                var count = await services.GetRequiredService<ISigmaRuleService>().UpdateFromHayabusaRulesAsync(token);
+                AnsiConsole.MarkupLine($"[green]Loaded {count:N0} Sigma rule(s)[/] from Hayabusa (hayabusa-rules).");
             }, ct);
         });
 

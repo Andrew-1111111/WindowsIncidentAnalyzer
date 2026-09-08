@@ -10,11 +10,13 @@ public static class ConfigurationLoader
     {
         var configDir = AppPaths.ConfigurationDirectory;
         builder.Configuration.Sources.Clear();
+        // Prefer settings next to wia.exe. Optional CWD override comes last so local tweaks still work,
+        // but Debug F5 from the repo no longer silently reverts Collection flags mid-session.
         builder.Configuration
-            .AddJsonFile(Path.Combine(configDir, "appsettings.json"), optional: true, reloadOnChange: false)
-            .AddJsonFile(Path.Combine(configDir, "DetectionRules.json"), optional: true, reloadOnChange: false)
             .AddJsonFile(Path.Combine(Directory.GetCurrentDirectory(), "Configuration", "appsettings.json"), optional: true, reloadOnChange: false)
             .AddJsonFile(Path.Combine(Directory.GetCurrentDirectory(), "Configuration", "DetectionRules.json"), optional: true, reloadOnChange: false)
+            .AddJsonFile(Path.Combine(configDir, "appsettings.json"), optional: true, reloadOnChange: false)
+            .AddJsonFile(Path.Combine(configDir, "DetectionRules.json"), optional: true, reloadOnChange: false)
             .AddEnvironmentVariables("WIA_");
     }
 

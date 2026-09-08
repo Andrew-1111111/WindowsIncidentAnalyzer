@@ -10,16 +10,16 @@ namespace WindowsIncidentAnalyzer.Tests.UnitTests;
 public sealed class ParallelAnalysisTests
 {
     [Fact]
-    public void ResolveMaxDegreeOfParallelism_Zero_UsesProcessorCount()
+    public void ResolveMaxDegreeOfParallelism_Zero_IsUnlimited()
     {
-        var degree = ParallelAnalysis.ResolveMaxDegreeOfParallelism(new AnalysisOptions());
-        Assert.Equal(Math.Max(1, Environment.ProcessorCount), degree);
+        var degree = ParallelAnalysis.ResolveMaxDegreeOfParallelism(new AnalyzerOptions());
+        Assert.Equal(-1, degree);
     }
 
     [Fact]
     public void ResolveMaxDegreeOfParallelism_ExplicitValue_IsRespected()
     {
-        var degree = ParallelAnalysis.ResolveMaxDegreeOfParallelism(new AnalysisOptions { MaxDegreeOfParallelism = 2 });
+        var degree = ParallelAnalysis.ResolveMaxDegreeOfParallelism(new AnalyzerOptions { MaxDegreeOfParallelism = 2 });
         Assert.Equal(2, degree);
     }
 
@@ -28,8 +28,8 @@ public sealed class ParallelAnalysisTests
     {
         var events = BuildCorrelationEvents();
         var rules = Options.Create(new DetectionRulesOptions());
-        var parallel = Options.Create(new AnalyzerOptions { Analysis = new AnalysisOptions { EnableParallelAnalysis = true, MaxDegreeOfParallelism = 4 } });
-        var sequential = Options.Create(new AnalyzerOptions { Analysis = new AnalysisOptions { EnableParallelAnalysis = false } });
+        var parallel = Options.Create(new AnalyzerOptions { MaxDegreeOfParallelism = 4 });
+        var sequential = Options.Create(new AnalyzerOptions { MaxDegreeOfParallelism = 1 });
 
         var parallelService = new CorrelationService(null!, rules, parallel, Microsoft.Extensions.Logging.Abstractions.NullLogger<CorrelationService>.Instance);
         var sequentialService = new CorrelationService(null!, rules, sequential, Microsoft.Extensions.Logging.Abstractions.NullLogger<CorrelationService>.Instance);
@@ -63,12 +63,12 @@ public sealed class ParallelAnalysisTests
         var parallel = new IocDetectionService(
             null!,
             null!,
-            Options.Create(new AnalyzerOptions { Analysis = new AnalysisOptions { EnableParallelAnalysis = true, MaxDegreeOfParallelism = 4 } }),
+            Options.Create(new AnalyzerOptions { MaxDegreeOfParallelism = 4 }),
             Microsoft.Extensions.Logging.Abstractions.NullLogger<IocDetectionService>.Instance);
         var sequential = new IocDetectionService(
             null!,
             null!,
-            Options.Create(new AnalyzerOptions { Analysis = new AnalysisOptions { EnableParallelAnalysis = false } }),
+            Options.Create(new AnalyzerOptions { MaxDegreeOfParallelism = 1 }),
             Microsoft.Extensions.Logging.Abstractions.NullLogger<IocDetectionService>.Instance);
 
         var parallelMatches = parallel.Scan(events, iocs);

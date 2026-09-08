@@ -105,7 +105,9 @@
     "AutoLoadOnStartup": true,
     "IncludeExperimental": false,
     "IncludeDeprecated": false,
-    "IncludeUnsupported": false
+    "IncludeUnsupported": false,
+    "IncludeEmergingThreats": false,
+    "IncludeThreatHunting": false
   },
   "Correlation": {
     "CorrelationWindowMinutes": 10

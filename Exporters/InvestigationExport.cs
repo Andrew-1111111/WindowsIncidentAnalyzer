@@ -16,6 +16,8 @@ public sealed class InvestigationExport
 
     public IReadOnlyList<IocMatch> IocMatches { get; set; } = [];
 
+    public IReadOnlyList<CveMatch> CveMatches { get; set; } = [];
+
     public IReadOnlyList<EventCorrelation> Correlations { get; set; } = [];
 
     public IReadOnlyList<TimelineItem> Timeline { get; set; } = [];

@@ -194,6 +194,16 @@ public sealed class SigmaRulesOptions
     public bool IncludeDeprecated { get; set; }
 
     public bool IncludeUnsupported { get; set; }
+
+    /// <summary>
+    /// When false, rules tagged <c>detection.emerging_threats</c> are excluded (Hayabusa ET add-on set).
+    /// </summary>
+    public bool IncludeEmergingThreats { get; set; }
+
+    /// <summary>
+    /// When false, rules tagged <c>detection.threat_hunting</c> are excluded (Hayabusa TH add-on set).
+    /// </summary>
+    public bool IncludeThreatHunting { get; set; }
 }
 
 public sealed class CorrelationOptions

@@ -8,11 +8,7 @@ public sealed class CsvExporter : IExporter
 
     public Task ExportAsync(InvestigationExport data, string path, CancellationToken cancellationToken)
     {
-        var directory = Path.GetDirectoryName(Path.GetFullPath(path));
-        if (!string.IsNullOrEmpty(directory))
-        {
-            Directory.CreateDirectory(directory);
-        }
+        var directory = ExportPath.EnsureDirectory(path);
 
         var stem = Path.Combine(
             directory ?? Directory.GetCurrentDirectory(),
@@ -48,6 +44,13 @@ public sealed class CsvExporter : IExporter
             "IOCs",
             ExportRowBuilder.BuildIocRows(data.IocMatches),
             new IocCsvRowMap(),
+            cancellationToken);
+
+        await ExcelSheetWriter.WriteAsync(
+            stem + "-cves.xlsx",
+            "CVEs",
+            ExportRowBuilder.BuildCveRows(data.CveMatches),
+            new CveCsvRowMap(),
             cancellationToken);
 
         await ExcelSheetWriter.WriteAsync(

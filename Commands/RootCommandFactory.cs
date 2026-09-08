@@ -29,6 +29,8 @@ public static class RootCommandFactory
         root.Subcommands.Add(AnalyzeCommand.Create(services));
         root.Subcommands.Add(IocCommand.Create(services));
         root.Subcommands.Add(SigmaCommand.Create(services));
+        root.Subcommands.Add(MitreCommand.Create(services));
+        root.Subcommands.Add(CveCommand.Create(services));
         root.Subcommands.Add(ExportCommand.Create(services));
         root.Subcommands.Add(StatsCommand.Create(services));
         return root;

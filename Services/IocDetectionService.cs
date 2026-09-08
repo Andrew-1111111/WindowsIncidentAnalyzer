@@ -49,12 +49,12 @@ public sealed class IocDetectionService(
             .ToList();
 
         var eventList = events as IReadOnlyList<WindowsEvent> ?? events.ToList();
-        var analysis = options.Value.Analysis;
+        var analyzer = options.Value;
         var matches = new ConcurrentBag<IocMatch>();
 
-        if (analysis.EnableParallelAnalysis && eventList.Count > 1)
+        if (ParallelAnalysis.ShouldUseParallel(analyzer, eventList.Count))
         {
-            var parallelOptions = ParallelAnalysis.CreateCpuBoundOptions(analysis);
+            var parallelOptions = ParallelAnalysis.CreateCpuBoundOptions(analyzer);
             Parallel.ForEach(eventList, parallelOptions, evt =>
             {
                 ScanEvent(evt, indicators, matches);

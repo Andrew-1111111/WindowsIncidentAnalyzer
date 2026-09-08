@@ -16,4 +16,22 @@ public sealed class ApplicationBootstrapTests
     {
         Assert.Equal(expected, ApplicationBootstrap.ShouldSkip(args));
     }
+
+    [Theory]
+    [InlineData(new[] { "--help" }, true)]
+    [InlineData(new[] { "--skip-bootstrap", "analyze" }, false)]
+    [InlineData(new[] { "analyze" }, false)]
+    public void IsHelpOrVersion_OnlyHelpAndVersion(string[] args, bool expected)
+    {
+        Assert.Equal(expected, ApplicationBootstrap.IsHelpOrVersion(args));
+    }
+
+    [Theory]
+    [InlineData(new[] { "--skip-bootstrap" }, true)]
+    [InlineData(new[] { "--no-bootstrap", "collect" }, true)]
+    [InlineData(new[] { "analyze" }, false)]
+    public void ShouldSkipThreatIntel_OnlyBootstrapFlags(string[] args, bool expected)
+    {
+        Assert.Equal(expected, ApplicationBootstrap.ShouldSkipThreatIntel(args));
+    }
 }

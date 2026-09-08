@@ -11,35 +11,13 @@ using WindowsIncidentAnalyzer.Models;
 
 namespace WindowsIncidentAnalyzer.Services;
 
-public sealed class EventLogQueryOptions
-{
-    public string? LogName { get; init; }
-
-    public string? EvtxPath { get; init; }
-
-    public DateTime? FromUtc { get; init; }
-
-    public DateTime? ToUtc { get; init; }
-
-    public IReadOnlyList<TimeRange>? TimeRanges { get; init; }
-
-    public IReadOnlyList<int>? EventIds { get; init; }
-
-    public int? Limit { get; init; }
-
-    /// <summary>
-    /// When true, access denied on a channel fails the command.
-    /// When false (default multi-log collect), the channel is skipped.
-    /// </summary>
-    public bool ThrowOnAccessDenied { get; init; }
-
-    public IList<string>? AccessDeniedLogs { get; init; }
-
-    public IList<string>? MissingLogs { get; init; }
-}
-
+/// <summary>
+/// Live collection mirrors the GitHub implementation: open channels by
+/// <see cref="PathType.LogName"/>, read with <see cref="EventLogReader.ReadEvent"/>,
+/// skip missing/denied channels. EVTX files are only used via <c>--evtx</c>.
+/// </summary>
 public sealed class EventLogService(
-    EventXmlParser parser,
+    EventRecordNormalizer normalizer,
     IOptions<AnalyzerOptions> options,
     ILogger<EventLogService> logger) : IEventLogService
 {
@@ -50,12 +28,15 @@ public sealed class EventLogService(
         var logs = ResolveLogs(queryOptions);
         var collection = options.Value.Collection;
 
-        if (CollectionParallelism.ShouldUseParallel(collection, logs.Count))
+        // Multi-channel live collect prefers parallel readers when MaxDegreeOfParallelism allows it.
+        var useParallel = ParallelAnalysis.ShouldUseParallel(options.Value, logs.Count);
+        if (useParallel)
         {
+            var workers = ParallelAnalysis.ResolveCollectionParallelism(options.Value, logs.Count);
             logger.LogInformation(
                 "Collecting {Count} event log channel(s) in parallel (workers={Workers})",
                 logs.Count,
-                ParallelAnalysis.ResolveMaxDegreeOfParallelism(collection));
+                workers);
 
             await foreach (var evt in CollectParallelAsync(logs, queryOptions, collection, cancellationToken))
             {
@@ -63,6 +44,11 @@ public sealed class EventLogService(
             }
 
             yield break;
+        }
+
+        if (logs.Count > 0)
+        {
+            logger.LogInformation("Collecting {Count} event log channel(s) sequentially", logs.Count);
         }
 
         await foreach (var evt in CollectSequentialAsync(logs, queryOptions, cancellationToken))
@@ -74,21 +60,28 @@ public sealed class EventLogService(
     public async IAsyncEnumerable<WindowsEvent> ReadChannelAsync(
         string path,
         PathType pathType,
-        EventLogQueryOptions options,
+        EventLogQueryOptions queryOptions,
         [EnumeratorCancellation] CancellationToken cancellationToken)
     {
         EventLogQuery query;
         try
         {
-            var xpath = BuildXPath(options);
+            var xpath = BuildXPath(queryOptions);
             query = string.IsNullOrEmpty(xpath)
                 ? new EventLogQuery(path, pathType)
                 : new EventLogQuery(path, pathType, xpath);
         }
         catch (Exception ex)
         {
-            logger.LogWarning(ex, "XPath query rejected for {Path}; falling back to unfiltered read", path);
+            logger.LogDebug(ex, "XPath query rejected for {Path}; falling back to unfiltered read", path);
             query = new EventLogQuery(path, pathType);
+        }
+
+        // Never call EventLogReader for channels we already know are missing.
+        if (pathType == PathType.LogName && WindowsLogCatalog.IsKnownMissingChannel(path))
+        {
+            TrackMissingLog(queryOptions, path);
+            yield break;
         }
 
         EventLogReader? reader = null;
@@ -96,17 +89,23 @@ public sealed class EventLogService(
         {
             reader = new EventLogReader(query);
         }
-        catch (EventLogNotFoundException ex)
+        catch (EventLogNotFoundException)
         {
-            logger.LogWarning(ex, "Event log {Path} was not found", path);
-            TrackMissingLog(options, path);
+            // Expected for optional channels; mark and continue without rethrowing.
+            if (pathType == PathType.LogName)
+            {
+                WindowsLogCatalog.MarkMissingChannel(path);
+            }
+
+            logger.LogDebug("Event log {Path} was not found", path);
+            TrackMissingLog(queryOptions, path);
             yield break;
         }
         catch (Exception ex) when (IsAccessDenied(ex))
         {
-            logger.LogWarning(ex, "Access denied to event log {Path}", path);
-            TrackAccessDenied(options, path);
-            if (options.ThrowOnAccessDenied)
+            logger.LogDebug(ex, "Access denied to event log {Path}", path);
+            TrackAccessDenied(queryOptions, path);
+            if (queryOptions.ThrowOnAccessDenied)
             {
                 throw new UnauthorizedAccessException(
                     $"Cannot read event log '{path}'. The Security log (and often Sysmon) require Administrator rights or membership in Event Log Readers. Other commands (search, analyze, EVTX files) do not.",
@@ -117,29 +116,34 @@ public sealed class EventLogService(
         }
         catch (EventLogException ex)
         {
-            logger.LogError(ex, "Cannot open event log {Path}", path);
-            TrackMissingLog(options, path);
+            logger.LogDebug(ex, "Cannot open event log {Path}", path);
+            TrackMissingLog(queryOptions, path);
             yield break;
         }
 
         using (reader)
         {
+            var preferNativeXml = pathType == PathType.FilePath ||
+                                  EventRecordNormalizer.ShouldTryNativeXml(path, providerName: null);
+
             while (true)
             {
                 cancellationToken.ThrowIfCancellationRequested();
-                EventRecord? record = null;
+                EventRecord? record;
                 try
                 {
                     record = reader.ReadEvent();
                 }
-                catch (EventLogException ex)
+                catch (EventLogNotFoundException)
                 {
-                    logger.LogWarning(ex, "Skipping unreadable record in {Path}", path);
+                    break;
+                }
+                catch (EventLogException)
+                {
                     continue;
                 }
-                catch (InvalidOperationException ex)
+                catch (InvalidOperationException)
                 {
-                    logger.LogWarning(ex, "Reader stopped for {Path}", path);
                     break;
                 }
 
@@ -148,33 +152,15 @@ public sealed class EventLogService(
                     break;
                 }
 
-                WindowsEvent? parsed = null;
-                try
+                WindowsEvent? parsed;
+                using (record)
                 {
-                    using (record)
+                    if (!Matches(record, queryOptions))
                     {
-                        if (!Matches(record, options))
-                        {
-                            continue;
-                        }
-
-                        string xml;
-                        try
-                        {
-                            xml = record.ToXml();
-                        }
-                        catch (Exception ex)
-                        {
-                            logger.LogWarning(ex, "Failed to export XML for record {Id} in {Path}", record.Id, path);
-                            continue;
-                        }
-
-                        parsed = parser.Parse(xml);
+                        continue;
                     }
-                }
-                catch (Exception ex)
-                {
-                    logger.LogWarning(ex, "Failed to normalize an event from {Path}", path);
+
+                    parsed = normalizer.TryNormalize(record, preferNativeXml);
                 }
 
                 if (parsed != null)
@@ -187,18 +173,18 @@ public sealed class EventLogService(
 
     private async IAsyncEnumerable<WindowsEvent> CollectSequentialAsync(
         IReadOnlyList<string> logs,
-        EventLogQueryOptions options,
+        EventLogQueryOptions queryOptions,
         [EnumeratorCancellation] CancellationToken cancellationToken)
     {
         var yielded = 0;
         foreach (var logName in logs)
         {
             cancellationToken.ThrowIfCancellationRequested();
-            await foreach (var evt in ReadChannelAsync(logName, PathType.LogName, options, cancellationToken))
+            await foreach (var evt in ReadChannelAsync(logName, PathType.LogName, queryOptions, cancellationToken))
             {
                 yield return evt;
                 yielded++;
-                if (options.Limit is > 0 && yielded >= options.Limit)
+                if (queryOptions.Limit is > 0 && yielded >= queryOptions.Limit)
                 {
                     yield break;
                 }
@@ -208,10 +194,11 @@ public sealed class EventLogService(
 
     private async IAsyncEnumerable<WindowsEvent> CollectParallelAsync(
         IReadOnlyList<string> logs,
-        EventLogQueryOptions options,
+        EventLogQueryOptions queryOptions,
         CollectionOptions collection,
         [EnumeratorCancellation] CancellationToken cancellationToken)
     {
+        var progress = new CollectionProgress(queryOptions.Limit);
         var capacity = Math.Max(collection.DefaultBatchSize * 2, 1000);
         var channel = Channel.CreateBounded<WindowsEvent>(new BoundedChannelOptions(capacity)
         {
@@ -221,7 +208,7 @@ public sealed class EventLogService(
         });
 
         using var stopCts = CancellationTokenSource.CreateLinkedTokenSource(cancellationToken);
-        var producer = ProduceChannelsAsync(logs, options, collection, channel.Writer, stopCts);
+        var producer = ProduceChannelsAsync(logs, queryOptions, collection, progress, channel.Writer, stopCts);
 
         var yielded = 0;
         try
@@ -229,8 +216,9 @@ public sealed class EventLogService(
             await foreach (var evt in channel.Reader.ReadAllAsync(cancellationToken))
             {
                 yielded++;
-                if (options.Limit is > 0 && yielded > options.Limit)
+                if (queryOptions.Limit is > 0 && yielded > queryOptions.Limit)
                 {
+                    progress.RequestStop();
                     stopCts.Cancel();
                     break;
                 }
@@ -240,20 +228,36 @@ public sealed class EventLogService(
         }
         finally
         {
-            await producer.ConfigureAwait(false);
+            progress.RequestStop();
+            stopCts.Cancel();
+            channel.Writer.TryComplete();
+
+            var shutdownSeconds = Math.Max(1, collection.ChannelShutdownTimeoutSeconds);
+            try
+            {
+                await producer.WaitAsync(TimeSpan.FromSeconds(shutdownSeconds), CancellationToken.None)
+                    .ConfigureAwait(false);
+            }
+            catch (TimeoutException)
+            {
+                logger.LogDebug(
+                    "Timed out after {Seconds}s waiting for event log readers to stop",
+                    shutdownSeconds);
+            }
         }
     }
 
     private async Task ProduceChannelsAsync(
         IReadOnlyList<string> logs,
-        EventLogQueryOptions options,
+        EventLogQueryOptions queryOptions,
         CollectionOptions collection,
+        CollectionProgress progress,
         ChannelWriter<WindowsEvent> writer,
         CancellationTokenSource stopCts)
     {
         try
         {
-            var parallelism = ParallelAnalysis.ResolveMaxDegreeOfParallelism(collection);
+            var parallelism = ParallelAnalysis.ResolveCollectionParallelism(options.Value, logs.Count);
             await Parallel.ForEachAsync(
                 logs,
                 new ParallelOptions
@@ -263,9 +267,25 @@ public sealed class EventLogService(
                 },
                 async (logName, ct) =>
                 {
-                    await foreach (var evt in ReadChannelAsync(logName, PathType.LogName, options, ct))
+                    await foreach (var evt in ReadChannelAsync(logName, PathType.LogName, queryOptions, ct))
                     {
-                        await writer.WriteAsync(evt, ct).ConfigureAwait(false);
+                        if (!progress.ShouldContinueReading())
+                        {
+                            break;
+                        }
+
+                        try
+                        {
+                            await writer.WriteAsync(evt, ct).ConfigureAwait(false);
+                        }
+                        catch (ChannelClosedException)
+                        {
+                            break;
+                        }
+                        catch (OperationCanceledException) when (stopCts.IsCancellationRequested)
+                        {
+                            break;
+                        }
                     }
                 }).ConfigureAwait(false);
         }
@@ -283,14 +303,46 @@ public sealed class EventLogService(
         writer.TryComplete();
     }
 
-    private static List<string> ResolveLogs(EventLogQueryOptions options)
+    /// <summary>
+    /// GitHub-compatible resolution: default channel set, optional --log, optional collect-all
+    /// from the registry. Missing optional channels (Sysmon) are filtered out before open.
+    /// </summary>
+    private List<string> ResolveLogs(EventLogQueryOptions queryOptions)
     {
-        if (!string.IsNullOrWhiteSpace(options.LogName))
+        var collection = options.Value.Collection;
+        IReadOnlyList<string> names;
+
+        if (!string.IsNullOrWhiteSpace(queryOptions.LogName))
         {
-            return [WindowsLogNames.Resolve(options.LogName)];
+            if (WindowsLogCatalog.IsAllLogsAlias(queryOptions.LogName))
+            {
+                names = WindowsLogCatalog.DiscoverLogNames(
+                    collection.IncludeAnalyticDebugLogs,
+                    discoverFromEvtxFiles: false);
+            }
+            else
+            {
+                // Explicit --log: attempt exactly that channel (MissingLogs reported on failure).
+                return [WindowsLogNames.Resolve(queryOptions.LogName)];
+            }
+        }
+        else if (collection.CollectAllLogs)
+        {
+            names = WindowsLogCatalog.DiscoverLogNames(
+                collection.IncludeAnalyticDebugLogs,
+                discoverFromEvtxFiles: false);
+        }
+        else
+        {
+            // Same default set as GitHub origin/master.
+            names = WindowsLogNames.DefaultCollectionLogs;
         }
 
-        return WindowsLogNames.DefaultCollectionLogs.ToList();
+        return names
+            .Where(name => !WindowsLogCatalog.IsKnownMissingChannel(name))
+            .Where(WindowsLogCatalog.IsPresentChannel)
+            .Distinct(StringComparer.OrdinalIgnoreCase)
+            .ToList();
     }
 
     private static void TrackAccessDenied(EventLogQueryOptions options, string path)

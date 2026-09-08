@@ -1,5 +1,6 @@
 using System.Diagnostics.Eventing.Reader;
 using Microsoft.Data.Sqlite;
+using Microsoft.EntityFrameworkCore;
 using Microsoft.Extensions.Logging;
 using Spectre.Console;
 
@@ -39,6 +40,12 @@ public sealed class CliErrorHandler(ILogger<CliErrorHandler> logger)
             AnsiConsole.MarkupLine($"[red]Event log error.[/] {Markup.Escape(ex.Message)}");
             AnsiConsole.MarkupLine("[grey]The EVTX file may be incomplete or the channel may be unavailable.[/]");
             return 3;
+        }
+        catch (DbUpdateException ex)
+        {
+            logger.LogError(ex, "Database update error");
+            AnsiConsole.MarkupLine($"[red]Database error.[/] {Markup.Escape(ex.GetBaseException().Message)}");
+            return 4;
         }
         catch (SqliteException ex)
         {

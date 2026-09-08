@@ -103,6 +103,11 @@ public static class ConsolePresenter
             AnsiConsole.MarkupLine($"[bold]IOC matches:[/] {summary.IocMatches.Count:N0}");
         }
 
+        if (summary.CveMatches.Count > 0)
+        {
+            AnsiConsole.MarkupLine($"[bold]CVE matches:[/] {summary.CveMatches.Count:N0}");
+        }
+
         if (summary.Findings.Count == 0)
         {
             AnsiConsole.MarkupLine("[grey]No detection findings in the selected time range.[/]");
@@ -179,7 +184,8 @@ public static class ConsolePresenter
 
             [bold]Sigma[/]
             Sigma ID: {Cell(ctx.SigmaId)} | Status: {Cell(ctx.SigmaStatus)}
-            MITRE: {Cell(ctx.MitreTactic)} / {Cell(ctx.MitreTechnique)}
+            MITRE: {Cell(ctx.MitreTacticName ?? ctx.MitreTactic)} / {Cell(ctx.MitreTechniqueName ?? ctx.MitreTechnique)}
+            MITRE URL: {Cell(ctx.MitreUrl)}
             Matched Selection: {Cell(ctx.MatchedSelection)}
             Matched Fields: {Cell(string.Join(", ", ctx.MatchedFields))}
             Matched Values: {Cell(string.Join(" | ", ctx.MatchedValues))}
@@ -223,6 +229,31 @@ public static class ConsolePresenter
         AnsiConsole.Write(table);
     }
 
+    public static void CveMatches(IReadOnlyList<CveMatch> matches)
+    {
+        var table = new Table().Border(TableBorder.Rounded);
+        table.AddColumn("CVE ID");
+        table.AddColumn("Vulnerability");
+        table.AddColumn("Event ID");
+        table.AddColumn("Timestamp");
+        table.AddColumn("Host");
+        table.AddColumn("Process");
+        table.AddColumn("User");
+        foreach (var m in matches)
+        {
+            table.AddRow(
+                Cell(m.CveId),
+                Cell(m.VulnerabilityName ?? m.ShortDescription, 40),
+                m.EventId.ToString(),
+                m.TimestampUtc.ToString("yyyy-MM-dd HH:mm:ss"),
+                Cell(m.Host),
+                Cell(m.RelatedProcess),
+                Cell(m.RelatedUser));
+        }
+
+        AnsiConsole.Write(table);
+    }
+
     public static void Summary(InvestigationSummary summary)
     {
         var panel = new Panel(
@@ -237,6 +268,7 @@ public static class ConsolePresenter
               Info:     {summary.InfoCount,6:N0}
 
             IOC matches:    {summary.IocMatches.Count,6:N0}
+            CVE matches:    {summary.CveMatches.Count,6:N0}
             Correlations:   {summary.Correlations.Count,6:N0}
 
             Top suspicious users:
@@ -350,6 +382,11 @@ public static class ConsolePresenter
         if (!string.IsNullOrWhiteSpace(ip))
         {
             parts.Add($"ip={ip}");
+        }
+
+        if (!string.IsNullOrWhiteSpace(ctx.MitreTechniqueName))
+        {
+            parts.Add($"mitre={ctx.MitreTechniqueName}");
         }
 
         return string.Join(" | ", parts);

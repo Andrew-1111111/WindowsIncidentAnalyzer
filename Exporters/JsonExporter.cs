@@ -22,11 +22,7 @@ public sealed class JsonExporter : IExporter
     public async Task ExportAsync(InvestigationExport data, string path, CancellationToken cancellationToken)
     {
         var full = Path.GetFullPath(path);
-        var directory = Path.GetDirectoryName(full);
-        if (!string.IsNullOrEmpty(directory))
-        {
-            Directory.CreateDirectory(directory);
-        }
+        ExportPath.EnsureDirectory(full);
 
         await using var stream = new FileStream(full, FileMode.Create, FileAccess.Write, FileShare.Read);
         await JsonSerializer.SerializeAsync(stream, data, Options, cancellationToken);

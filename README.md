@@ -33,7 +33,7 @@ dotnet build
 dotnet test
 ```
 
-The test suite currently includes **187** tests. The compiled executable is named `wia.exe`. Runtime data and logs are stored next to the executable under `data/`.
+The test suite currently includes **427** tests. The compiled executable is named `wia.exe`. Runtime data and logs are stored next to the executable under `data/`.
 
 ### Local publish variants
 

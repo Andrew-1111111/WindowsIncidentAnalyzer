@@ -132,6 +132,76 @@ public sealed class CisaKevParserTests
         Assert.Equal("CVE-2024-1234", matches[0].CveId);
     }
 
+    [Fact]
+    public void CveDetectionService_UnknownCve_IsIgnored()
+    {
+        var records = CisaKevParser.Parse(SampleFeed, "test");
+        var service = new CveDetectionService(
+            new EmptyEventRepository(),
+            new TestCveRepository(records),
+            Microsoft.Extensions.Options.Options.Create(new Configuration.AnalyzerOptions()),
+            Microsoft.Extensions.Logging.Abstractions.NullLogger<CveDetectionService>.Instance);
+
+        var matches = service.Scan(
+        [
+            new Models.WindowsEvent
+            {
+                Id = 1,
+                EventId = 4688,
+                TimeCreatedUtc = DateTime.UtcNow,
+                CommandLine = "tool.exe CVE-1999-0001"
+            }
+        ],
+        records.ToDictionary(r => r.CveId, StringComparer.OrdinalIgnoreCase));
+
+        Assert.Empty(matches);
+    }
+
+    [Fact]
+    public void CveDetectionService_DedupesSameCveOnSameEventAcrossFields()
+    {
+        var records = CisaKevParser.Parse(SampleFeed, "test");
+        var service = new CveDetectionService(
+            new EmptyEventRepository(),
+            new TestCveRepository(records),
+            Microsoft.Extensions.Options.Options.Create(new Configuration.AnalyzerOptions()),
+            Microsoft.Extensions.Logging.Abstractions.NullLogger<CveDetectionService>.Instance);
+
+        var matches = service.Scan(
+        [
+            new Models.WindowsEvent
+            {
+                Id = 42,
+                EventId = 4688,
+                TimeCreatedUtc = DateTime.UtcNow,
+                CommandLine = "CVE-2024-1234",
+                ScriptBlock = "also CVE-2024-1234 again"
+            }
+        ],
+        records.ToDictionary(r => r.CveId, StringComparer.OrdinalIgnoreCase));
+
+        Assert.Single(matches);
+        Assert.Equal(42, matches[0].EventRowId);
+    }
+
+    [Fact]
+    public void CveDetectionService_EmptyCatalog_ReturnsEmpty()
+    {
+        var service = new CveDetectionService(
+            new EmptyEventRepository(),
+            new TestCveRepository([]),
+            Microsoft.Extensions.Options.Options.Create(new Configuration.AnalyzerOptions()),
+            Microsoft.Extensions.Logging.Abstractions.NullLogger<CveDetectionService>.Instance);
+
+        var matches = service.Scan(
+        [
+            new Models.WindowsEvent { Id = 1, CommandLine = "CVE-2024-1234" }
+        ],
+        new Dictionary<string, Models.CveRecord>(StringComparer.OrdinalIgnoreCase));
+
+        Assert.Empty(matches);
+    }
+
     private sealed class TestCveRepository(IReadOnlyList<Models.CveRecord> records) : Repositories.ICveRepository
     {
         public int Count => records.Count;

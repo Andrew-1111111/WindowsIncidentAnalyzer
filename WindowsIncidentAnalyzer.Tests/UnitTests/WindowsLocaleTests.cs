@@ -2,6 +2,7 @@ using Microsoft.Extensions.Options;
 using WindowsIncidentAnalyzer.Configuration;
 using WindowsIncidentAnalyzer.Detectors;
 using WindowsIncidentAnalyzer.Infrastructure;
+using WindowsIncidentAnalyzer.Models;
 using WindowsIncidentAnalyzer.Services;
 using WindowsIncidentAnalyzer.Tests.Fixtures;
 using Xunit;
@@ -79,7 +80,10 @@ public sealed class WindowsLocaleTests
 public sealed class PrivilegeChangeDetectorTests
 {
     private readonly EventXmlParser _parser = new();
-    private readonly PrivilegeChangeDetector _detector = new(Options.Create(new DetectionRulesOptions()));
+    private readonly PrivilegeChangeDetector _detector = new(Options.Create(new DetectionRulesOptions
+    {
+        PrivilegeChange = new PrivilegeChangeOptions { Enabled = true }
+    }));
 
     [Fact]
     public void Analyze_RussianAdministratorsGroup_IsPrivileged()
@@ -96,5 +100,71 @@ public sealed class PrivilegeChangeDetectorTests
 
         var findings = _detector.Analyze([evt]).ToList();
         Assert.Contains(findings, f => f.Title.Contains("privileged group", StringComparison.OrdinalIgnoreCase));
+    }
+
+    [Fact]
+    public void Analyze_EnglishAdministratorsGroup_ReportsHighFinding()
+    {
+        var evt = _parser.Parse(EventXmlFixtures.SecurityEvent(
+            4728,
+            "2026-08-01T12:00:00.0000000Z",
+            "LAB-HOST-01",
+            ("MemberName", @"LAB\attacker"),
+            ("TargetUserName", "Administrators"),
+            ("TargetSid", "S-1-5-32-544"),
+            ("SubjectUserName", "admin")));
+
+        var finding = Assert.Single(_detector.Analyze([evt]));
+        Assert.Equal(DetectionSeverity.High, finding.Severity);
+        Assert.Contains("Administrators", finding.Description, StringComparison.OrdinalIgnoreCase);
+    }
+
+    [Fact]
+    public void Analyze_NonPrivilegedGroup_IsIgnored()
+    {
+        var evt = _parser.Parse(EventXmlFixtures.SecurityEvent(
+            4732,
+            "2026-08-01T12:00:00.0000000Z",
+            "LAB-HOST-01",
+            ("MemberName", @"LAB\user1"),
+            ("TargetUserName", "Users"),
+            ("TargetSid", "S-1-5-32-545")));
+
+        Assert.Empty(_detector.Analyze([evt]));
+    }
+
+    [Fact]
+    public void Analyze_SpecialPrivilegesLogon_ReportsLowFinding()
+    {
+        var evt = _parser.Parse(EventXmlFixtures.SecurityEvent(
+            4672,
+            "2026-08-01T12:00:00.0000000Z",
+            "LAB-HOST-01",
+            ("SubjectUserName", "admin"),
+            ("SubjectDomainName", "LAB"),
+            ("PrivilegeList", "SeDebugPrivilege")));
+        evt.User = "admin";
+
+        var finding = Assert.Single(_detector.Analyze([evt]));
+        Assert.Equal(DetectionSeverity.Low, finding.Severity);
+        Assert.Contains("Special privileges", finding.Title, StringComparison.OrdinalIgnoreCase);
+    }
+
+    [Fact]
+    public void Analyze_Disabled_ReturnsNothing()
+    {
+        var detector = new PrivilegeChangeDetector(Options.Create(new DetectionRulesOptions
+        {
+            PrivilegeChange = new PrivilegeChangeOptions { Enabled = false }
+        }));
+        var evt = _parser.Parse(EventXmlFixtures.SecurityEvent(
+            4728,
+            "2026-08-01T12:00:00.0000000Z",
+            "LAB-HOST-01",
+            ("MemberName", @"LAB\attacker"),
+            ("TargetUserName", "Administrators"),
+            ("TargetSid", "S-1-5-32-544")));
+
+        Assert.Empty(detector.Analyze([evt]));
     }
 }

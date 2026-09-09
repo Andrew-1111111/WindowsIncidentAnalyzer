@@ -126,4 +126,37 @@ public static class EventXmlFixtures
             ("SubjectUserName", user),
             ("SubjectDomainName", "LAB"),
             ("PrivilegeList", "SeDebugPrivilege"));
+
+    public static string EventlogChannelCleared(string timeUtc, string computer = "LAB-HOST-01") =>
+        EventlogEvent(104, timeUtc, computer,
+            ("Channel", "Security"),
+            ("SubjectUserName", "labadmin"),
+            ("SubjectDomainName", "LAB"));
+
+    public static string EventlogEvent(
+        int eventId,
+        string timeUtc,
+        string computer,
+        params (string Name, string Value)[] data)
+    {
+        var dataXml = string.Join(
+            Environment.NewLine,
+            data.Select(d => $"      <Data Name=\"{d.Name}\">{System.Net.WebUtility.HtmlEncode(d.Value)}</Data>"));
+
+        return $"""
+            <Event xmlns="{SecurityNs}">
+              <System>
+                <Provider Name="Microsoft-Windows-Eventlog" />
+                <EventID>{eventId}</EventID>
+                <Level>4</Level>
+                <TimeCreated SystemTime="{timeUtc}" />
+                <Channel>System</Channel>
+                <Computer>{computer}</Computer>
+              </System>
+              <EventData>
+            {dataXml}
+              </EventData>
+            </Event>
+            """;
+    }
 }
